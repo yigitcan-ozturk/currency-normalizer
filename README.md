@@ -70,12 +70,24 @@ python -m unittest discover -s tests -v
 
 The tests mock network responses, so CI does not depend on a live exchange-rate service. GitHub Actions runs the suite automatically on supported Python versions.
 
-## Related tools
+## Procurement tooling suite
 
-This project is part of a small procurement-tooling set:
+`currency-normalizer` is part of a small set of transparent Python tools for supplier and procurement decision support:
 
-- [`rfqdiff`](https://github.com/yigitcan-ozturk/rfqdiff) — compare and score supplier quotations
-- [`payment-terms-parser`](https://github.com/yigitcan-ozturk/payment-terms-parser) — parse and standardize supplier payment terms
+| Tool | Role |
+| --- | --- |
+| [`rfqdiff`](https://github.com/yigitcan-ozturk/rfqdiff) | Compare and score supplier quotations |
+| **[`currency-normalizer`](https://github.com/yigitcan-ozturk/currency-normalizer)** | Normalize quotation values across currencies |
+| [`payment-terms-parser`](https://github.com/yigitcan-ozturk/payment-terms-parser) | Convert payment terms into commercial-risk signals |
+| [`vendor-risk-engine`](https://github.com/yigitcan-ozturk/vendor-risk-engine) | Score operational, commercial, compliance and dependency risk |
+
+A typical decision flow is:
+
+```text
+currency-normalizer -> payment-terms-parser -> rfqdiff -> vendor-risk-engine
+```
+
+Each tool can run independently. The suite roadmap is to combine their outputs into a composite supplier scorecard.
 
 ## Roadmap
 
@@ -84,6 +96,7 @@ This project is part of a small procurement-tooling set:
 - Historical rate support
 - Structured JSON output
 - Integration with `rfqdiff`
+- Composite supplier scorecard integration
 
 ## Status
 
