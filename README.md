@@ -6,7 +6,7 @@ A lightweight Python CLI for normalizing supplier quotation amounts across curre
 
 ## Why currency-normalizer
 
-Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. `currency-normalizer` converts an amount from one currency to another using a current exchange rate so quotations can be compared on a common basis.
+Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. `currency-normalizer` converts amounts into a common currency and can also rewrite a quotation JSON file into an `rfqdiff`-ready normalized quote.
 
 The tool uses `Decimal` arithmetic for money calculations and keeps the conversion logic small and transparent.
 
@@ -15,9 +15,10 @@ The tool uses `Decimal` arithmetic for money calculations and keeps the conversi
 - Convert currency amounts from the command line
 - Fetch current exchange rates
 - Use `Decimal` arithmetic for money calculations
-- Round converted values to two decimal places
-- Handle API and connection errors
-- Return a 1:1 rate for same-currency comparisons
+- Return structured JSON
+- Normalize an entire quotation JSON file
+- Preserve original currency/rate metadata
+- Produce quotation files that can be passed directly to `rfqdiff`
 - Run with Python only — no third-party runtime dependencies
 
 ## Quick start
@@ -27,80 +28,96 @@ The tool uses `Decimal` arithmetic for money calculations and keeps the conversi
 - Python 3.11+
 - Internet access for cross-currency conversion
 
-### Run
+### Normalize one amount
 
 ```bash
 python main.py 10000 USD EUR
 ```
 
-Example output format:
-
-```text
-CURRENCY NORMALIZER v0.1
-----------------------------------------
-Original  : 10,000.00 USD
-Rate      : 1 USD = <rate> EUR
-Converted : <amount> EUR
-Rate date : <date>
-```
-
-For identical currencies, no external exchange-rate request is needed:
+Structured output:
 
 ```bash
-python main.py 10000 EUR EUR
+python main.py 10000 USD EUR --json
 ```
 
-## How it works
+Or write it to a file:
 
-1. Normalize currency codes to uppercase.
-2. Fetch the requested exchange rate when the currencies differ.
-3. Multiply the source amount by the rate using `Decimal` arithmetic.
-4. Round the converted amount to two decimal places using `ROUND_HALF_UP`.
-5. Print the rate and rate date alongside the converted value.
+```bash
+python main.py 10000 USD EUR --output fx.json
+```
 
-Exchange-rate data is requested from the Frankfurter API.
+### Normalize an rfqdiff quotation
+
+Given:
+
+```json
+{
+  "name": "Supplier B",
+  "currency": "USD",
+  "price": 85000,
+  "lead_time_weeks": 10,
+  "payment_days": 30
+}
+```
+
+Run:
+
+```bash
+python main.py \
+  --quote supplier_b.json \
+  --target-currency EUR \
+  --output supplier_b_eur.json
+```
+
+The output preserves the quotation fields expected by `rfqdiff`, changes `price` and `currency`, and adds a `normalization` metadata block with the original price, currency, rate and rate date.
+
+Then use the normalized quote directly:
+
+```bash
+python ../rfqdiff/main.py supplier_a_eur.json supplier_b_eur.json
+```
+
+## Pipeline role
+
+`currency-normalizer` is the normalization input to the quotation-comparison branch:
+
+```text
+currency-normalizer ──> rfqdiff ───────────────┐
+                                               │
+payment-terms-parser ──────────────────────────┼─> supplier-scorecard
+                                               │
+vendor-risk-engine ────────────────────────────┘
+```
 
 ## Tests
-
-Run the test suite locally with:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The tests mock network responses, so CI does not depend on a live exchange-rate service. GitHub Actions runs the suite automatically on supported Python versions.
+GitHub Actions runs the suite automatically on supported Python versions.
 
 ## Procurement tooling suite
 
-`currency-normalizer` is part of a small set of transparent Python tools for supplier and procurement decision support:
-
 | Tool | Role |
 | --- | --- |
-| [`rfqdiff`](https://github.com/yigitcan-ozturk/rfqdiff) | Compare and score supplier quotations |
 | **[`currency-normalizer`](https://github.com/yigitcan-ozturk/currency-normalizer)** | Normalize quotation values across currencies |
+| [`rfqdiff`](https://github.com/yigitcan-ozturk/rfqdiff) | Compare and score normalized quotations |
 | [`payment-terms-parser`](https://github.com/yigitcan-ozturk/payment-terms-parser) | Convert payment terms into commercial-risk signals |
-| [`vendor-risk-engine`](https://github.com/yigitcan-ozturk/vendor-risk-engine) | Score operational, commercial, compliance and dependency risk |
-
-A typical decision flow is:
-
-```text
-currency-normalizer -> payment-terms-parser -> rfqdiff -> vendor-risk-engine
-```
-
-Each tool can run independently. The suite roadmap is to combine their outputs into a composite supplier scorecard.
+| [`vendor-risk-engine`](https://github.com/yigitcan-ozturk/vendor-risk-engine) | Score operational, quality, compliance and dependency risk |
+| [`supplier-scorecard`](https://github.com/yigitcan-ozturk/supplier-scorecard) | Combine upstream signals into one supplier recommendation |
 
 ## Roadmap
 
 - Batch quotation normalization
 - Configurable base currency
-- Historical rate support
-- Structured JSON output
-- Integration with `rfqdiff`
-- Composite supplier scorecard integration
+- Historical-rate support
+- Portfolio normalization manifests
+- More explicit provenance/version contracts
 
 ## Status
 
-Early-stage project, currently at **v0.1**. The core single-amount conversion workflow is functional.
+Early-stage project, currently at **v0.2**. This version adds structured JSON output and quotation-file normalization so the result can feed directly into `rfqdiff`.
 
 ## License
 
