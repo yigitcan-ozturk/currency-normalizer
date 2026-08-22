@@ -1,14 +1,16 @@
 # currency-normalizer
 
-A lightweight Python CLI for normalizing supplier quotation amounts across currencies.
+**Auditable FX normalization for supplier quotations.**
 
 [![Tests](https://github.com/yigitcan-ozturk/currency-normalizer/actions/workflows/tests.yml/badge.svg)](https://github.com/yigitcan-ozturk/currency-normalizer/actions/workflows/tests.yml)
 
+`currency-normalizer` converts supplier quotation amounts into a common currency while preserving the original amount, currency, rate and rate date as explicit provenance. It is the FX normalization boundary of the engineering procurement toolchain.
+
 ## Why currency-normalizer
 
-Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. `currency-normalizer` converts amounts into a common currency and can also rewrite a quotation JSON file into an `rfqdiff`-ready normalized quote.
+Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. The tool normalizes those amounts before commercial comparison and keeps conversion evidence visible rather than hiding FX assumptions inside downstream scoring.
 
-The tool uses `Decimal` arithmetic for money calculations and keeps the conversion logic small and transparent.
+The implementation uses `Decimal` arithmetic for money calculations and keeps the conversion logic small and transparent.
 
 ## Features
 
@@ -79,14 +81,16 @@ python ../rfqdiff/main.py supplier_a_eur.json supplier_b_eur.json
 
 ## Pipeline role
 
-`currency-normalizer` is the normalization input to the quotation-comparison branch:
+`currency-normalizer` is the normalization input to the commercial quotation branch. Technical compliance remains independently owned by `bidlint`.
 
 ```text
-currency-normalizer ──> rfqdiff ───────────────┐
-                                               │
-payment-terms-parser ──────────────────────────┼─> supplier-scorecard
-                                               │
-vendor-risk-engine ────────────────────────────┘
+currency-normalizer ──> rfqdiff ────────────────┐
+                                                 │
+payment-terms-parser ───────────────────────────┼──> supplier-scorecard
+                                                 │
+vendor-risk-engine ─────────────────────────────┤
+                                                 │
+bidlint ──> technical compliance ───────────────┘
 ```
 
 ## Tests
@@ -97,15 +101,16 @@ python -m unittest discover -s tests -v
 
 GitHub Actions runs the suite automatically on supported Python versions.
 
-## Procurement tooling suite
+## Engineering procurement toolchain
 
 | Tool | Role |
 | --- | --- |
-| **[`currency-normalizer`](https://github.com/yigitcan-ozturk/currency-normalizer)** | Normalize quotation values across currencies |
+| **[`currency-normalizer`](https://github.com/yigitcan-ozturk/currency-normalizer)** | Normalize quotation currencies with explicit FX provenance |
 | [`rfqdiff`](https://github.com/yigitcan-ozturk/rfqdiff) | Compare and score normalized quotations |
 | [`payment-terms-parser`](https://github.com/yigitcan-ozturk/payment-terms-parser) | Convert payment terms into commercial-risk signals |
-| [`vendor-risk-engine`](https://github.com/yigitcan-ozturk/vendor-risk-engine) | Score operational, quality, compliance and dependency risk |
-| [`supplier-scorecard`](https://github.com/yigitcan-ozturk/supplier-scorecard) | Combine upstream signals into one supplier recommendation |
+| [`vendor-risk-engine`](https://github.com/yigitcan-ozturk/vendor-risk-engine) | Score delivery, quality, commercial, compliance and dependency risk |
+| [`bidlint`](https://github.com/yigitcan-ozturk/bidlint) | Produce evidence-backed technical-compliance findings |
+| [`supplier-scorecard`](https://github.com/yigitcan-ozturk/supplier-scorecard) | Combine commercial, risk and technical signals into an explainable supplier decision |
 
 ## Roadmap
 
@@ -117,7 +122,7 @@ GitHub Actions runs the suite automatically on supported Python versions.
 
 ## Status
 
-Early-stage project, currently at **v0.2**. This version adds structured JSON output and quotation-file normalization so the result can feed directly into `rfqdiff`.
+Early-stage project, currently at **v0.2**. This version provides structured JSON output and quotation-file normalization so the result can feed directly into `rfqdiff`.
 
 ## License
 
