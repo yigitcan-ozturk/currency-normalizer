@@ -3,14 +3,36 @@
 **Auditable FX normalization for supplier quotations.**
 
 [![Tests](https://github.com/yigitcan-ozturk/currency-normalizer/actions/workflows/tests.yml/badge.svg)](https://github.com/yigitcan-ozturk/currency-normalizer/actions/workflows/tests.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 `currency-normalizer` converts supplier quotation amounts into a common currency while preserving the original amount, currency, rate and rate date as explicit provenance. It is the FX normalization boundary of the engineering procurement toolchain.
 
 ## Why currency-normalizer
 
-Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. The tool normalizes those amounts before commercial comparison and keeps conversion evidence visible rather than hiding FX assumptions inside downstream scoring.
+Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. This tool normalizes those amounts before commercial scoring and keeps the conversion evidence visible instead of hiding FX assumptions inside a downstream recommendation.
 
-The implementation uses `Decimal` arithmetic for money calculations and keeps the conversion logic small and transparent.
+The implementation uses `Decimal` arithmetic for money calculations and deliberately keeps the conversion logic small and inspectable.
+
+## Decision boundary
+
+`currency-normalizer` is responsible for **FX normalization only**.
+
+It does:
+
+- convert supported currency amounts;
+- fetch a current exchange rate for cross-currency conversion;
+- preserve original amount, currency, applied rate and rate date;
+- normalize quotation JSON into the shape expected by `rfqdiff`;
+- return machine-readable JSON.
+
+It intentionally does **not**:
+
+- compare or rank suppliers;
+- determine whether an exchange rate is commercially acceptable;
+- provide treasury, accounting or hedging advice;
+- determine technical compliance;
+- hide the applied FX rate from downstream reviewers.
 
 ## Features
 
@@ -93,13 +115,23 @@ vendor-risk-engine ────────────────────�
 bidlint ──> technical compliance ───────────────┘
 ```
 
-## Tests
+## Quality gates
+
+GitHub Actions runs the unit-test suite on Python 3.11, 3.12 and 3.13 for pushes to `main` and pull requests.
+
+Local verification:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-GitHub Actions runs the suite automatically on supported Python versions.
+## Engineering principles
+
+- **Visible FX provenance** — the original value and applied conversion evidence remain available.
+- **Decimal money arithmetic** — monetary calculations avoid binary floating-point shortcuts.
+- **Single responsibility** — normalization stays separate from supplier scoring.
+- **Machine-readable handoff** — normalized quotation data can feed directly into `rfqdiff`.
+- **Reviewable assumptions** — the applied FX rate is evidence, not hidden state.
 
 ## Engineering procurement toolchain
 
