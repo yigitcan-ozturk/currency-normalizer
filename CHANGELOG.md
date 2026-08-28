@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — v0.3.0
+## Unreleased — v0.4.0
+
+- Add portfolio normalization policy files with explicit base currency, rate date, provider and optional portfolio ID.
+- Allow batch CLI values to override policy values without changing the source policy file.
+- Add deterministic, order-independent normalization `run_id` values derived from effective policy and source-file SHA-256 fingerprints.
+- Add SHA-256 lineage for every batch source and normalized output file.
+- Add policy SHA-256 provenance to normalization manifests.
+- Attach batch `run_id` and `portfolio_id` to normalized quotation metadata.
+- Add JSON Schema contract for portfolio policies and strengthen manifest lineage schema.
+- Expand the test suite with reproducibility, policy override and digest-lineage coverage.
+
+## Release candidate — v0.3.0
 
 - Add historical FX rate selection with `--rate-date YYYY-MM-DD`.
 - Add batch quotation normalization with `--quotes`.
