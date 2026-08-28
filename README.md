@@ -6,11 +6,11 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`currency-normalizer` converts supplier quotation amounts into a common currency while preserving the original amount, currency, rate and rate date as explicit provenance. It is the FX normalization boundary of the engineering procurement toolchain.
+`currency-normalizer` converts supplier quotation amounts into a common currency while preserving the original amount, currency, applied rate, rate date and rate-source policy as explicit provenance. It is the FX normalization boundary of the engineering procurement toolchain.
 
 ## Why currency-normalizer
 
-Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. This tool normalizes those amounts before commercial scoring and keeps the conversion evidence visible instead of hiding FX assumptions inside a downstream recommendation.
+Supplier quotations often arrive in different currencies, which makes direct price comparison unreliable. This tool normalizes those amounts before commercial scoring and keeps conversion evidence visible instead of hiding FX assumptions inside a downstream recommendation.
 
 The implementation uses `Decimal` arithmetic for money calculations and deliberately keeps the conversion logic small and inspectable.
 
@@ -22,9 +22,10 @@ It does:
 
 - convert supported currency amounts;
 - fetch current or historical exchange rates for cross-currency conversion;
-- preserve original amount, currency, applied rate and rate date;
+- use Frankfurter's blended provider set by default or pin a named provider;
+- preserve original amount, currency, applied rate, rate date and source policy;
 - normalize one or many quotation JSON files into the shape expected by `rfqdiff`;
-- write a normalization manifest for batch runs;
+- write a versioned normalization manifest for batch runs;
 - return machine-readable JSON.
 
 It intentionally does **not**:
@@ -33,21 +34,22 @@ It intentionally does **not**:
 - determine whether an exchange rate is commercially acceptable;
 - provide treasury, accounting or hedging advice;
 - determine technical compliance;
-- hide the applied FX rate from downstream reviewers.
+- hide the applied FX rate or rate-source policy from downstream reviewers.
 
 ## Features
 
 - Convert currency amounts from the command line
 - Fetch current exchange rates
 - Request historical rates by date
+- Pin a Frankfurter provider such as `ECB`, `BOE` or `TCMB`
 - Use `Decimal` arithmetic for money calculations
-- Return structured JSON
+- Return structured JSON with explicit schema versions
 - Normalize a single quotation JSON file
 - Batch-normalize multiple quotation JSON files
-- Preserve original currency/rate metadata
 - Preserve exact decimal strings in normalization provenance
 - Produce quotation files that can be passed directly to `rfqdiff`
-- Produce a batch normalization manifest
+- Produce a versioned batch normalization manifest
+- Validate the `currency-normalizer → rfqdiff` handoff in CI
 - Run with Python only — no third-party runtime dependencies
 
 ## Quick start
@@ -69,19 +71,24 @@ Structured output:
 python main.py 10000 USD EUR --json
 ```
 
-Or write it to a file:
-
-```bash
-python main.py 10000 USD EUR --output fx.json
-```
-
 ### Use a historical rate
 
 ```bash
 python main.py 10000 USD EUR --rate-date 2026-08-01 --json
 ```
 
-Historical lookups use the same explicit provenance contract: the applied rate and returned rate date remain visible in the output.
+### Pin a provider
+
+Frankfurter blends available provider data by default. When a procurement or jurisdiction policy requires a named authority, pin the provider explicitly:
+
+```bash
+python main.py 10000 USD EUR \
+  --rate-date 2026-08-01 \
+  --provider ECB \
+  --json
+```
+
+The output records whether the rate source was `blended`, `pinned` or `same_currency`, together with the provider key when one was pinned.
 
 ### Normalize one rfqdiff quotation
 
@@ -103,12 +110,13 @@ Run:
 python main.py \
   --quote supplier_b.json \
   --target-currency EUR \
+  --provider ECB \
   --output supplier_b_eur.json
 ```
 
-The output preserves the quotation fields expected by `rfqdiff`, changes `price` and `currency`, and adds a `normalization` metadata block with the original price, currency, normalized decimal value, rate and rate date.
+The output preserves the quotation fields expected by `rfqdiff`, changes `price` and `currency`, and adds a versioned `normalization` metadata block with original price, currency, exact normalized decimal value, rate, rate date and rate-source policy.
 
-Then use the normalized quote directly:
+Then use normalized quotations directly:
 
 ```bash
 python ../rfqdiff/main.py supplier_a_eur.json supplier_b_eur.json
@@ -121,22 +129,37 @@ python main.py \
   --quotes supplier_a.json supplier_b.json supplier_c.json \
   --target-currency EUR \
   --rate-date 2026-08-01 \
+  --provider ECB \
   --output-dir normalized
 ```
 
-This writes one normalized quotation per input plus:
+This writes one normalized quotation per input plus `normalized/normalization-manifest.json`.
 
-```text
-normalized/normalization-manifest.json
-```
+The manifest records the schema version, tool version, target currency, requested historical date, source policy, source paths, output paths and supplier names so a procurement review can trace the batch operation.
 
-The manifest records the tool version, target currency, requested historical rate date, source paths, output paths and supplier names so a procurement review can trace the batch operation.
+## Contract versioning
 
-If `--output-dir` is omitted, batch mode prints a machine-readable JSON array instead.
+Machine-readable outputs carry explicit schema identifiers and `schema_version: "1.0"`.
+
+- amount output: `currency-normalizer.amount`
+- quotation normalization metadata: `currency-normalizer.normalization`
+- batch manifest: `currency-normalizer.manifest`
+
+The normalized quotation contract is documented in [`schemas/normalized-quote.schema.json`](schemas/normalized-quote.schema.json), and the batch manifest contract is documented in [`schemas/normalization-manifest.schema.json`](schemas/normalization-manifest.schema.json).
+
+The top-level normalized quotation remains compatible with `rfqdiff`: required commercial fields stay numeric/unchanged in shape, while normalization evidence lives in an additional metadata block.
+
+## Rate-source policy
+
+FX data is retrieved through [Frankfurter](https://frankfurter.dev/).
+
+- Without `--provider`, Frankfurter's blended provider set is used.
+- With `--provider`, the named provider key is passed to Frankfurter and recorded in provenance.
+- For same-currency normalization, no network call is made and the source policy is recorded as `same_currency`.
+
+Provider pinning is a reproducibility/control feature; this tool does not decide which authority is legally or commercially appropriate for a given transaction.
 
 ## Pipeline role
-
-`currency-normalizer` is the normalization input to the commercial quotation branch. Technical compliance remains independently owned by `bidlint`.
 
 ```text
 currency-normalizer ──> rfqdiff ────────────────┐
@@ -150,23 +173,26 @@ bidlint ──> technical compliance ──────────────�
 
 ## Quality gates
 
-GitHub Actions runs the unit-test suite on Python 3.11, 3.12 and 3.13 for pushes to `main` and pull requests.
+GitHub Actions runs on Python 3.11, 3.12 and 3.13 for pushes to `main` and pull requests. CI also checks out `rfqdiff` and executes an end-to-end handoff test so cross-tool contract drift is detected early.
 
-Local verification:
+Local unit verification:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
+The cross-repository integration test runs when `RFQDIFF_MAIN` points to an `rfqdiff/main.py` checkout.
+
 ## Engineering principles
 
-- **Visible FX provenance** — the original value and applied conversion evidence remain available.
-- **Decimal money arithmetic** — monetary calculations avoid binary floating-point shortcuts.
-- **Historical reproducibility** — quotation comparisons can be rerun against an explicit rate date.
+- **Visible FX provenance** — conversion evidence and source policy remain available.
+- **Decimal money arithmetic** — monetary calculations avoid binary floating-point shortcuts internally.
+- **Historical reproducibility** — comparisons can be rerun against an explicit rate date.
+- **Provider reproducibility** — a named authority can be pinned when policy requires it.
+- **Versioned contracts** — downstream tools can identify the normalization schema explicitly.
 - **Single responsibility** — normalization stays separate from supplier scoring.
-- **Machine-readable handoff** — normalized quotation data can feed directly into `rfqdiff`.
+- **Machine-readable handoff** — normalized quotation data feeds directly into `rfqdiff`.
 - **Batch auditability** — multi-supplier normalization creates an explicit manifest.
-- **Reviewable assumptions** — the applied FX rate is evidence, not hidden state.
 
 ## Engineering procurement toolchain
 
@@ -182,16 +208,15 @@ python -m unittest discover -s tests -v
 ## Roadmap
 
 - Configurable base-currency policy for procurement portfolios
-- Rate-provider attribution and provider-selection policy
-- Stronger schema/version contracts across the procurement toolchain
-- Portfolio-level normalization manifests and run identifiers
-- End-to-end integration tests with `rfqdiff`
+- Portfolio-level run identifiers and stronger manifest lineage
+- Contract validation across additional downstream procurement tools
+- Provider-policy presets for common procurement contexts
 
 ## Status
 
-Development line: **v0.3**.
+Development line: **v0.3.0**.
 
-This version adds historical-rate selection, batch quotation normalization, batch manifests and stronger decimal provenance while preserving the numeric quotation shape expected by `rfqdiff`.
+This line includes historical-rate selection, batch normalization, manifests, provider pinning/source provenance, schema-versioned contracts and a real `rfqdiff` integration gate.
 
 The repository's latest published GitHub release may lag the development version until the corresponding release tag is published.
 
