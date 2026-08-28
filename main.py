@@ -1,12 +1,14 @@
 import argparse
 import json
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-VERSION = "0.2"
+VERSION = "0.3"
 
 QUOTE_REQUIRED_FIELDS = (
     "name",
@@ -17,14 +19,30 @@ QUOTE_REQUIRED_FIELDS = (
 )
 
 
-def get_rate(base, quote):
+def validate_rate_date(value):
+    if value is None:
+        return None
+
+    value = str(value)
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("rate date must use YYYY-MM-DD format") from exc
+
+    return value
+
+
+def get_rate(base, quote, requested_date=None):
     base = str(base).upper()
     quote = str(quote).upper()
+    requested_date = validate_rate_date(requested_date)
 
     if base == quote:
-        return Decimal("1"), "same currency"
+        return Decimal("1"), requested_date or "same currency"
 
     url = f"https://api.frankfurter.dev/v2/rate/{base}/{quote}"
+    if requested_date:
+        url += "?" + urlencode({"date": requested_date})
 
     request = Request(
         url,
@@ -54,12 +72,12 @@ def get_rate(base, quote):
     return data["rate"], data["date"]
 
 
-def normalize_amount(amount, base, quote):
+def normalize_amount(amount, base, quote, rate_date=None):
     amount = Decimal(str(amount))
     base = str(base).upper()
     quote = str(quote).upper()
 
-    rate, rate_date = get_rate(base, quote)
+    rate, applied_rate_date = get_rate(base, quote, rate_date)
 
     converted = (amount * rate).quantize(
         Decimal("0.01"),
@@ -74,7 +92,7 @@ def normalize_amount(amount, base, quote):
         "to_currency": quote,
         "rate": str(rate),
         "converted_amount": str(converted),
-        "rate_date": rate_date,
+        "rate_date": applied_rate_date,
     }
 
 
@@ -92,7 +110,7 @@ def load_quote(path):
     return quote
 
 
-def normalize_quote(quote, target_currency):
+def normalize_quote(quote, target_currency, rate_date=None):
     target_currency = str(target_currency).upper()
     source_currency = str(quote["currency"]).upper()
 
@@ -100,6 +118,7 @@ def normalize_quote(quote, target_currency):
         quote["price"],
         source_currency,
         target_currency,
+        rate_date=rate_date,
     )
 
     normalized = dict(quote)
@@ -108,14 +127,66 @@ def normalize_quote(quote, target_currency):
     normalized["normalization"] = {
         "tool": result["tool"],
         "version": result["version"],
-        "original_price": float(Decimal(result["original_amount"])),
+        "original_price": result["original_amount"],
         "original_currency": source_currency,
         "target_currency": target_currency,
         "rate": result["rate"],
         "rate_date": result["rate_date"],
+        "normalized_price": result["converted_amount"],
     }
 
     return normalized
+
+
+def normalize_quote_files(paths, target_currency, rate_date=None):
+    normalized = []
+
+    for path in paths:
+        quote_path = Path(path)
+        quote = load_quote(quote_path)
+        normalized.append(
+            {
+                "source": str(quote_path),
+                "quote": normalize_quote(
+                    quote,
+                    target_currency,
+                    rate_date=rate_date,
+                ),
+            }
+        )
+
+    return normalized
+
+
+def write_batch_outputs(items, output_dir, target_currency, rate_date=None):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    files = []
+    for item in items:
+        source = Path(item["source"])
+        destination = output_dir / (
+            f"{source.stem}_{str(target_currency).lower()}.json"
+        )
+        write_json(item["quote"], destination)
+        files.append(
+            {
+                "source": item["source"],
+                "output": str(destination),
+                "supplier": item["quote"]["name"],
+            }
+        )
+
+    manifest = {
+        "tool": "currency-normalizer",
+        "version": VERSION,
+        "target_currency": str(target_currency).upper(),
+        "requested_rate_date": validate_rate_date(rate_date),
+        "files": files,
+    }
+    write_json(manifest, output_dir / "normalization-manifest.json")
+
+    return manifest
 
 
 def write_json(payload, path):
@@ -144,7 +215,7 @@ def print_report(result):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Normalize currency amounts or convert a quotation JSON file "
+            "Normalize currency amounts or quotation JSON files "
             "into an rfqdiff-ready target currency."
         )
     )
@@ -165,31 +236,61 @@ def build_parser():
     parser.add_argument(
         "--quote",
         dest="quote_path",
-        help="Normalize the price inside an rfqdiff quotation JSON file.",
+        help="Normalize one rfqdiff quotation JSON file.",
+    )
+    parser.add_argument(
+        "--quotes",
+        nargs="+",
+        help="Normalize multiple rfqdiff quotation JSON files.",
     )
     parser.add_argument(
         "--target-currency",
-        help="Target currency for --quote mode.",
+        help="Target currency for quotation modes.",
+    )
+    parser.add_argument(
+        "--rate-date",
+        help="Use a historical FX rate date in YYYY-MM-DD format.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        help="Write batch-normalized quotation files and a manifest here.",
     )
 
     return parser
 
 
 def validate_cli_mode(parser, args):
-    if args.quote_path:
+    try:
+        validate_rate_date(args.rate_date)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.quote_path and args.quotes:
+        parser.error("--quote and --quotes cannot be used together.")
+
+    quotation_mode = bool(args.quote_path or args.quotes)
+
+    if quotation_mode:
         if any(
             value is not None
             for value in (args.amount, args.from_currency, args.to_currency)
         ):
             parser.error(
-                "--quote mode cannot be combined with amount/from/to positionals."
+                "quotation mode cannot be combined with amount/from/to positionals."
             )
         if not args.target_currency:
-            parser.error("--quote mode requires --target-currency.")
+            parser.error("quotation mode requires --target-currency.")
+        if args.quotes and args.output:
+            parser.error("batch --quotes mode uses --output-dir, not --output.")
+        if args.quote_path and args.output_dir:
+            parser.error("--output-dir is only valid with --quotes.")
         return
 
     if args.target_currency:
-        parser.error("--target-currency is only valid with --quote.")
+        parser.error("--target-currency is only valid with --quote or --quotes.")
+
+    if args.output_dir:
+        parser.error("--output-dir is only valid with --quotes.")
 
     if args.amount is None or not args.from_currency or not args.to_currency:
         parser.error(
@@ -203,9 +304,32 @@ def main():
     validate_cli_mode(parser, args)
 
     try:
+        if args.quotes:
+            items = normalize_quote_files(
+                args.quotes,
+                args.target_currency,
+                rate_date=args.rate_date,
+            )
+
+            if args.output_dir:
+                manifest = write_batch_outputs(
+                    items,
+                    args.output_dir,
+                    args.target_currency,
+                    rate_date=args.rate_date,
+                )
+                print(json.dumps(manifest, indent=2, ensure_ascii=False))
+            else:
+                print(json.dumps(items, indent=2, ensure_ascii=False))
+            return
+
         if args.quote_path:
             quote = load_quote(args.quote_path)
-            payload = normalize_quote(quote, args.target_currency)
+            payload = normalize_quote(
+                quote,
+                args.target_currency,
+                rate_date=args.rate_date,
+            )
 
             if args.output:
                 write_json(payload, args.output)
@@ -217,6 +341,7 @@ def main():
             args.amount,
             args.from_currency,
             args.to_currency,
+            rate_date=args.rate_date,
         )
 
         if args.output:
