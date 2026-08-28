@@ -16,10 +16,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out rfqdiff integration dependency
+        uses: actions/checkout@v4
+        with:
+          repository: yigitcan-ozturk/rfqdiff
+          path: integration/rfqdiff
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Run tests
+        env:
+          RFQDIFF_MAIN: ${{ github.workspace }}/integration/rfqdiff/main.py
         run: python -m unittest discover -s tests -v

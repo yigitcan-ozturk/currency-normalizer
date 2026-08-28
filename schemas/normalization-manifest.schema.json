@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yigitcan-ozturk/currency-normalizer/schemas/normalization-manifest.schema.json",
+  "title": "currency-normalizer batch normalization manifest",
+  "type": "object",
+  "required": ["schema", "schema_version", "tool", "version", "target_currency", "requested_rate_date", "rate_source", "files"],
+  "properties": {
+    "schema": {"const": "currency-normalizer.manifest"},
+    "schema_version": {"const": "1.0"},
+    "tool": {"const": "currency-normalizer"},
+    "version": {"type": "string"},
+    "target_currency": {"type": "string", "minLength": 3, "maxLength": 3},
+    "requested_rate_date": {"type": ["string", "null"]},
+    "rate_source": {
+      "type": "object",
+      "required": ["service", "service_url", "selection", "provider"],
+      "properties": {
+        "service": {"const": "Frankfurter"},
+        "service_url": {"const": "https://frankfurter.dev"},
+        "selection": {"enum": ["blended", "pinned"]},
+        "provider": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "output", "supplier"],
+        "properties": {
+          "source": {"type": "string"},
+          "output": {"type": "string"},
+          "supplier": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

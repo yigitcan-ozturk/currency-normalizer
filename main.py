@@ -8,7 +8,14 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-VERSION = "0.3"
+VERSION = "0.3.0"
+SCHEMA_VERSION = "1.0"
+RATE_SERVICE = "Frankfurter"
+RATE_SERVICE_URL = "https://frankfurter.dev"
+
+AMOUNT_SCHEMA = "currency-normalizer.amount"
+NORMALIZATION_SCHEMA = "currency-normalizer.normalization"
+MANIFEST_SCHEMA = "currency-normalizer.manifest"
 
 QUOTE_REQUIRED_FIELDS = (
     "name",
@@ -32,17 +39,57 @@ def validate_rate_date(value):
     return value
 
 
-def get_rate(base, quote, requested_date=None):
+def validate_provider(value):
+    if value is None:
+        return None
+
+    provider = str(value).strip().upper()
+    if not provider:
+        raise ValueError("provider cannot be empty")
+    if not all(character.isalnum() or character in "_-" for character in provider):
+        raise ValueError("provider must use letters, numbers, '-' or '_'")
+    return provider
+
+
+def build_rate_source(base, quote, provider=None):
+    base = str(base).upper()
+    quote = str(quote).upper()
+    provider = validate_provider(provider)
+
+    if base == quote:
+        selection = "same_currency"
+        provider = None
+    elif provider:
+        selection = "pinned"
+    else:
+        selection = "blended"
+
+    return {
+        "service": RATE_SERVICE,
+        "service_url": RATE_SERVICE_URL,
+        "selection": selection,
+        "provider": provider,
+    }
+
+
+def get_rate(base, quote, requested_date=None, provider=None):
     base = str(base).upper()
     quote = str(quote).upper()
     requested_date = validate_rate_date(requested_date)
+    provider = validate_provider(provider)
 
     if base == quote:
         return Decimal("1"), requested_date or "same currency"
 
-    url = f"https://api.frankfurter.dev/v2/rate/{base}/{quote}"
+    params = {}
     if requested_date:
-        url += "?" + urlencode({"date": requested_date})
+        params["date"] = requested_date
+    if provider:
+        params["providers"] = provider
+
+    url = f"https://api.frankfurter.dev/v2/rate/{base}/{quote}"
+    if params:
+        url += "?" + urlencode(params)
 
     request = Request(
         url,
@@ -72,12 +119,18 @@ def get_rate(base, quote, requested_date=None):
     return data["rate"], data["date"]
 
 
-def normalize_amount(amount, base, quote, rate_date=None):
+def normalize_amount(amount, base, quote, rate_date=None, provider=None):
     amount = Decimal(str(amount))
     base = str(base).upper()
     quote = str(quote).upper()
+    provider = validate_provider(provider)
 
-    rate, applied_rate_date = get_rate(base, quote, rate_date)
+    rate, applied_rate_date = get_rate(
+        base,
+        quote,
+        rate_date,
+        provider=provider,
+    )
 
     converted = (amount * rate).quantize(
         Decimal("0.01"),
@@ -85,6 +138,8 @@ def normalize_amount(amount, base, quote, rate_date=None):
     )
 
     return {
+        "schema": AMOUNT_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
         "tool": "currency-normalizer",
         "version": VERSION,
         "original_amount": str(amount),
@@ -93,6 +148,7 @@ def normalize_amount(amount, base, quote, rate_date=None):
         "rate": str(rate),
         "converted_amount": str(converted),
         "rate_date": applied_rate_date,
+        "rate_source": build_rate_source(base, quote, provider),
     }
 
 
@@ -110,7 +166,7 @@ def load_quote(path):
     return quote
 
 
-def normalize_quote(quote, target_currency, rate_date=None):
+def normalize_quote(quote, target_currency, rate_date=None, provider=None):
     target_currency = str(target_currency).upper()
     source_currency = str(quote["currency"]).upper()
 
@@ -119,12 +175,15 @@ def normalize_quote(quote, target_currency, rate_date=None):
         source_currency,
         target_currency,
         rate_date=rate_date,
+        provider=provider,
     )
 
     normalized = dict(quote)
     normalized["currency"] = target_currency
     normalized["price"] = float(Decimal(result["converted_amount"]))
     normalized["normalization"] = {
+        "schema": NORMALIZATION_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
         "tool": result["tool"],
         "version": result["version"],
         "original_price": result["original_amount"],
@@ -133,12 +192,13 @@ def normalize_quote(quote, target_currency, rate_date=None):
         "rate": result["rate"],
         "rate_date": result["rate_date"],
         "normalized_price": result["converted_amount"],
+        "rate_source": result["rate_source"],
     }
 
     return normalized
 
 
-def normalize_quote_files(paths, target_currency, rate_date=None):
+def normalize_quote_files(paths, target_currency, rate_date=None, provider=None):
     normalized = []
 
     for path in paths:
@@ -151,6 +211,7 @@ def normalize_quote_files(paths, target_currency, rate_date=None):
                     quote,
                     target_currency,
                     rate_date=rate_date,
+                    provider=provider,
                 ),
             }
         )
@@ -158,7 +219,13 @@ def normalize_quote_files(paths, target_currency, rate_date=None):
     return normalized
 
 
-def write_batch_outputs(items, output_dir, target_currency, rate_date=None):
+def write_batch_outputs(
+    items,
+    output_dir,
+    target_currency,
+    rate_date=None,
+    provider=None,
+):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -177,11 +244,20 @@ def write_batch_outputs(items, output_dir, target_currency, rate_date=None):
             }
         )
 
+    provider = validate_provider(provider)
     manifest = {
+        "schema": MANIFEST_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
         "tool": "currency-normalizer",
         "version": VERSION,
         "target_currency": str(target_currency).upper(),
         "requested_rate_date": validate_rate_date(rate_date),
+        "rate_source": {
+            "service": RATE_SERVICE,
+            "service_url": RATE_SERVICE_URL,
+            "selection": "pinned" if provider else "blended",
+            "provider": provider,
+        },
         "files": files,
     }
     write_json(manifest, output_dir / "normalization-manifest.json")
@@ -210,6 +286,9 @@ def print_report(result):
     )
     print(f"Converted : {converted:,.2f} {result['to_currency']}")
     print(f"Rate date : {result['rate_date']}")
+    source = result["rate_source"]
+    provider = source["provider"] or source["selection"]
+    print(f"Rate source: {source['service']} ({provider})")
 
 
 def build_parser():
@@ -252,6 +331,13 @@ def build_parser():
         help="Use a historical FX rate date in YYYY-MM-DD format.",
     )
     parser.add_argument(
+        "--provider",
+        help=(
+            "Pin a Frankfurter provider key such as ECB, BOE or TCMB. "
+            "Omit to use Frankfurter's blended provider set."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         help="Write batch-normalized quotation files and a manifest here.",
     )
@@ -262,6 +348,7 @@ def build_parser():
 def validate_cli_mode(parser, args):
     try:
         validate_rate_date(args.rate_date)
+        validate_provider(args.provider)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -309,6 +396,7 @@ def main():
                 args.quotes,
                 args.target_currency,
                 rate_date=args.rate_date,
+                provider=args.provider,
             )
 
             if args.output_dir:
@@ -317,6 +405,7 @@ def main():
                     args.output_dir,
                     args.target_currency,
                     rate_date=args.rate_date,
+                    provider=args.provider,
                 )
                 print(json.dumps(manifest, indent=2, ensure_ascii=False))
             else:
@@ -329,6 +418,7 @@ def main():
                 quote,
                 args.target_currency,
                 rate_date=args.rate_date,
+                provider=args.provider,
             )
 
             if args.output:
@@ -342,6 +432,7 @@ def main():
             args.from_currency,
             args.to_currency,
             rate_date=args.rate_date,
+            provider=args.provider,
         )
 
         if args.output:
