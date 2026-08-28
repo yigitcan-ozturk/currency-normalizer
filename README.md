@@ -21,9 +21,10 @@ The implementation uses `Decimal` arithmetic for money calculations and delibera
 It does:
 
 - convert supported currency amounts;
-- fetch a current exchange rate for cross-currency conversion;
+- fetch current or historical exchange rates for cross-currency conversion;
 - preserve original amount, currency, applied rate and rate date;
-- normalize quotation JSON into the shape expected by `rfqdiff`;
+- normalize one or many quotation JSON files into the shape expected by `rfqdiff`;
+- write a normalization manifest for batch runs;
 - return machine-readable JSON.
 
 It intentionally does **not**:
@@ -38,11 +39,15 @@ It intentionally does **not**:
 
 - Convert currency amounts from the command line
 - Fetch current exchange rates
+- Request historical rates by date
 - Use `Decimal` arithmetic for money calculations
 - Return structured JSON
-- Normalize an entire quotation JSON file
+- Normalize a single quotation JSON file
+- Batch-normalize multiple quotation JSON files
 - Preserve original currency/rate metadata
+- Preserve exact decimal strings in normalization provenance
 - Produce quotation files that can be passed directly to `rfqdiff`
+- Produce a batch normalization manifest
 - Run with Python only — no third-party runtime dependencies
 
 ## Quick start
@@ -70,7 +75,15 @@ Or write it to a file:
 python main.py 10000 USD EUR --output fx.json
 ```
 
-### Normalize an rfqdiff quotation
+### Use a historical rate
+
+```bash
+python main.py 10000 USD EUR --rate-date 2026-08-01 --json
+```
+
+Historical lookups use the same explicit provenance contract: the applied rate and returned rate date remain visible in the output.
+
+### Normalize one rfqdiff quotation
 
 Given:
 
@@ -93,13 +106,33 @@ python main.py \
   --output supplier_b_eur.json
 ```
 
-The output preserves the quotation fields expected by `rfqdiff`, changes `price` and `currency`, and adds a `normalization` metadata block with the original price, currency, rate and rate date.
+The output preserves the quotation fields expected by `rfqdiff`, changes `price` and `currency`, and adds a `normalization` metadata block with the original price, currency, normalized decimal value, rate and rate date.
 
 Then use the normalized quote directly:
 
 ```bash
 python ../rfqdiff/main.py supplier_a_eur.json supplier_b_eur.json
 ```
+
+### Batch-normalize supplier quotations
+
+```bash
+python main.py \
+  --quotes supplier_a.json supplier_b.json supplier_c.json \
+  --target-currency EUR \
+  --rate-date 2026-08-01 \
+  --output-dir normalized
+```
+
+This writes one normalized quotation per input plus:
+
+```text
+normalized/normalization-manifest.json
+```
+
+The manifest records the tool version, target currency, requested historical rate date, source paths, output paths and supplier names so a procurement review can trace the batch operation.
+
+If `--output-dir` is omitted, batch mode prints a machine-readable JSON array instead.
 
 ## Pipeline role
 
@@ -129,8 +162,10 @@ python -m unittest discover -s tests -v
 
 - **Visible FX provenance** — the original value and applied conversion evidence remain available.
 - **Decimal money arithmetic** — monetary calculations avoid binary floating-point shortcuts.
+- **Historical reproducibility** — quotation comparisons can be rerun against an explicit rate date.
 - **Single responsibility** — normalization stays separate from supplier scoring.
 - **Machine-readable handoff** — normalized quotation data can feed directly into `rfqdiff`.
+- **Batch auditability** — multi-supplier normalization creates an explicit manifest.
 - **Reviewable assumptions** — the applied FX rate is evidence, not hidden state.
 
 ## Engineering procurement toolchain
@@ -146,15 +181,19 @@ python -m unittest discover -s tests -v
 
 ## Roadmap
 
-- Batch quotation normalization
-- Configurable base currency
-- Historical-rate support
-- Portfolio normalization manifests
-- More explicit provenance/version contracts
+- Configurable base-currency policy for procurement portfolios
+- Rate-provider attribution and provider-selection policy
+- Stronger schema/version contracts across the procurement toolchain
+- Portfolio-level normalization manifests and run identifiers
+- End-to-end integration tests with `rfqdiff`
 
 ## Status
 
-Early-stage project, currently at **v0.2**. This version provides structured JSON output and quotation-file normalization so the result can feed directly into `rfqdiff`.
+Development line: **v0.3**.
+
+This version adds historical-rate selection, batch quotation normalization, batch manifests and stronger decimal provenance while preserving the numeric quotation shape expected by `rfqdiff`.
+
+The repository's latest published GitHub release may lag the development version until the corresponding release tag is published.
 
 ## License
 
