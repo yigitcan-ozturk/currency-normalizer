@@ -95,7 +95,7 @@ python main.py \
   --output-dir normalized
 ```
 
-This writes one normalized quotation per input and:
+This writes one normalized quotation per input plus:
 
 ```text
 normalized/normalization-manifest.json
@@ -103,7 +103,9 @@ normalized/normalization-manifest.json
 
 ## Portfolio policy
 
-The v0.4 development line adds a reusable portfolio normalization policy. Example:
+A reusable portfolio policy can define the normalization assumptions once and apply them consistently across a sourcing run.
+
+Example:
 
 ```json
 {
@@ -125,7 +127,7 @@ python main.py \
   --output-dir normalized
 ```
 
-CLI values override policy values when explicitly supplied. For example, `--target-currency GBP` or `--provider BOE` can override the policy for a specific run without modifying the source policy file.
+Explicit CLI values override policy values for a specific run without modifying the source policy file.
 
 The policy contract is documented in [`schemas/portfolio-policy.schema.json`](schemas/portfolio-policy.schema.json).
 
@@ -137,28 +139,18 @@ Batch runs receive a deterministic ID such as:
 cn-3d3bc1a5a3edb8a836d5
 ```
 
-The ID is derived from:
-
-- the canonical effective portfolio policy;
-- the SHA-256 digest of each source quotation;
-- source file names;
-- schema version.
-
-Input ordering does not change the run ID. Changing a source file or effective policy does.
+The run identity is derived from the effective portfolio policy, source quotation SHA-256 digests, source file names and schema version. Equivalent inputs and policy produce the same ID; changing source evidence or effective policy changes it.
 
 The batch manifest records:
 
-- `run_id`;
-- `portfolio_id`;
-- the full effective policy;
-- `policy_sha256`;
-- source SHA-256 digests;
-- normalized-output SHA-256 digests;
+- `run_id` and `portfolio_id`;
+- the effective policy and `policy_sha256`;
+- source and normalized-output SHA-256 digests;
 - target currency and requested rate date;
-- rate-source policy and provider;
+- provider/rate-source policy;
 - source/output paths and supplier names.
 
-Each normalized quotation written during a batch run also carries the `run_id` and `portfolio_id` in its normalization metadata, linking the quotation back to the manifest.
+Each normalized quotation written during a batch run carries the corresponding run and portfolio identity in its normalization metadata.
 
 ## Rate-source policy
 
@@ -169,7 +161,7 @@ FX data is retrieved through [Frankfurter](https://frankfurter.dev/).
 - Same-currency normalization avoids a network call and records `same_currency`.
 - A batch containing different source-selection modes is summarized as `mixed` in the manifest.
 
-Provider pinning is a control/reproducibility feature. The tool does not decide which authority is legally or commercially appropriate for a transaction.
+Provider pinning is a reproducibility/control feature. The tool does not decide which authority is legally or commercially appropriate for a transaction.
 
 ## Contract versioning
 
@@ -200,7 +192,7 @@ bidlint ──> technical compliance ──────────────�
 
 ## Quality gates
 
-GitHub Actions runs on Python 3.11, 3.12 and 3.13 for pushes to `main` and pull requests. CI checks out `rfqdiff` and executes the real handoff test, so downstream contract drift is detected early.
+GitHub Actions runs on Python 3.11, 3.12 and 3.13 for pushes to `main` and pull requests. CI checks out `rfqdiff` and executes the real handoff test so downstream contract drift is detected early.
 
 Local verification:
 
@@ -235,9 +227,9 @@ The cross-repository integration test runs when `RFQDIFF_MAIN` points to an `rfq
 
 ## Status
 
-`main` remains the release-ready **v0.3.0** line until its GitHub release is published.
+Latest published release: **v0.3.0**.
 
-The `feat/v0.4-reproducible-runs` development branch adds portfolio policies and reproducible/content-addressed batch lineage. It should not merge into `main` until the v0.3.0 release is published.
+`main` now also contains the post-v0.3 reproducible portfolio-run work: reusable base-currency policy, deterministic run identity, source/output SHA-256 lineage and stronger portfolio provenance. These capabilities are present on `main` but should be treated as the next release line until a new tagged release is published.
 
 ## License
 
