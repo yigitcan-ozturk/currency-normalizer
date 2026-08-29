@@ -3,13 +3,42 @@
   "$id": "https://github.com/yigitcan-ozturk/currency-normalizer/schemas/normalization-manifest.schema.json",
   "title": "currency-normalizer batch normalization manifest",
   "type": "object",
-  "required": ["schema", "schema_version", "tool", "version", "target_currency", "requested_rate_date", "rate_source", "files"],
+  "required": [
+    "schema",
+    "schema_version",
+    "tool",
+    "version",
+    "run_id",
+    "portfolio_id",
+    "policy",
+    "policy_sha256",
+    "target_currency",
+    "requested_rate_date",
+    "rate_source",
+    "files"
+  ],
   "properties": {
     "schema": {"const": "currency-normalizer.manifest"},
     "schema_version": {"const": "1.0"},
     "tool": {"const": "currency-normalizer"},
     "version": {"type": "string"},
-    "target_currency": {"type": "string", "minLength": 3, "maxLength": 3},
+    "run_id": {"type": "string", "pattern": "^cn-[0-9a-f]{20}$"},
+    "portfolio_id": {"type": ["string", "null"], "maxLength": 120},
+    "policy": {
+      "type": "object",
+      "required": ["schema", "schema_version", "base_currency", "rate_date", "provider", "portfolio_id"],
+      "properties": {
+        "schema": {"const": "currency-normalizer.portfolio-policy"},
+        "schema_version": {"const": "1.0"},
+        "base_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "rate_date": {"type": ["string", "null"], "format": "date"},
+        "provider": {"type": ["string", "null"]},
+        "portfolio_id": {"type": ["string", "null"], "maxLength": 120}
+      },
+      "additionalProperties": false
+    },
+    "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "target_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
     "requested_rate_date": {"type": ["string", "null"]},
     "rate_source": {
       "type": "object",
@@ -17,7 +46,7 @@
       "properties": {
         "service": {"const": "Frankfurter"},
         "service_url": {"const": "https://frankfurter.dev"},
-        "selection": {"enum": ["blended", "pinned"]},
+        "selection": {"enum": ["blended", "pinned", "same_currency", "mixed"]},
         "provider": {"type": ["string", "null"]}
       },
       "additionalProperties": false
@@ -26,10 +55,12 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["source", "output", "supplier"],
+        "required": ["source", "source_sha256", "output", "output_sha256", "supplier"],
         "properties": {
           "source": {"type": "string"},
+          "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "output": {"type": "string"},
+          "output_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "supplier": {"type": "string"}
         },
         "additionalProperties": false

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yigitcan-ozturk/currency-normalizer/schemas/portfolio-policy.schema.json",
+  "title": "currency-normalizer portfolio policy",
+  "type": "object",
+  "required": ["schema", "schema_version", "base_currency"],
+  "properties": {
+    "schema": {"const": "currency-normalizer.portfolio-policy"},
+    "schema_version": {"const": "1.0"},
+    "portfolio_id": {"type": ["string", "null"], "maxLength": 120},
+    "base_currency": {"type": "string", "pattern": "^[A-Za-z]{3}$"},
+    "rate_date": {"type": ["string", "null"], "format": "date"},
+    "provider": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

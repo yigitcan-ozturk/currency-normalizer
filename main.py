@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -8,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0-dev"
 SCHEMA_VERSION = "1.0"
 RATE_SERVICE = "Frankfurter"
 RATE_SERVICE_URL = "https://frankfurter.dev"
@@ -16,6 +17,7 @@ RATE_SERVICE_URL = "https://frankfurter.dev"
 AMOUNT_SCHEMA = "currency-normalizer.amount"
 NORMALIZATION_SCHEMA = "currency-normalizer.normalization"
 MANIFEST_SCHEMA = "currency-normalizer.manifest"
+POLICY_SCHEMA = "currency-normalizer.portfolio-policy"
 
 QUOTE_REQUIRED_FIELDS = (
     "name",
@@ -51,6 +53,187 @@ def validate_provider(value):
     return provider
 
 
+def validate_currency(value, field_name="currency"):
+    currency = str(value).strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError(f"{field_name} must use a 3-letter currency code")
+    return currency
+
+
+def validate_portfolio_id(value):
+    if value is None:
+        return None
+
+    portfolio_id = str(value).strip()
+    if not portfolio_id:
+        raise ValueError("portfolio_id cannot be empty")
+    if len(portfolio_id) > 120:
+        raise ValueError("portfolio_id cannot exceed 120 characters")
+    if not all(
+        character.isalnum() or character in "-_.:/"
+        for character in portfolio_id
+    ):
+        raise ValueError(
+            "portfolio_id must use letters, numbers, '-', '_', '.', ':', or '/'"
+        )
+    return portfolio_id
+
+
+def canonical_sha256(payload):
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_effective_policy(
+    base_currency,
+    rate_date=None,
+    provider=None,
+    portfolio_id=None,
+):
+    return {
+        "schema": POLICY_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
+        "base_currency": validate_currency(base_currency, "base_currency"),
+        "rate_date": validate_rate_date(rate_date),
+        "provider": validate_provider(provider),
+        "portfolio_id": validate_portfolio_id(portfolio_id),
+    }
+
+
+def validate_policy_document(policy):
+    if not isinstance(policy, dict):
+        raise ValueError("portfolio policy must be a JSON object")
+
+    required = {"schema", "schema_version", "base_currency"}
+    missing = sorted(required - set(policy))
+    if missing:
+        raise ValueError(
+            "portfolio policy is missing required field(s): " + ", ".join(missing)
+        )
+
+    allowed = {
+        "schema",
+        "schema_version",
+        "base_currency",
+        "rate_date",
+        "provider",
+        "portfolio_id",
+    }
+    unknown = sorted(set(policy) - allowed)
+    if unknown:
+        raise ValueError(
+            "portfolio policy contains unsupported field(s): " + ", ".join(unknown)
+        )
+
+    if policy["schema"] != POLICY_SCHEMA:
+        raise ValueError(f"portfolio policy schema must be {POLICY_SCHEMA}")
+    if str(policy["schema_version"]) != SCHEMA_VERSION:
+        raise ValueError(
+            f"portfolio policy schema_version must be {SCHEMA_VERSION}"
+        )
+
+    return build_effective_policy(
+        policy["base_currency"],
+        rate_date=policy.get("rate_date"),
+        provider=policy.get("provider"),
+        portfolio_id=policy.get("portfolio_id"),
+    )
+
+
+def load_portfolio_policy(path):
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as handle:
+        policy = json.load(handle)
+    return validate_policy_document(policy)
+
+
+def resolve_portfolio_policy(
+    policy=None,
+    target_currency=None,
+    rate_date=None,
+    provider=None,
+    portfolio_id=None,
+):
+    policy = policy or {}
+    base_currency = target_currency or policy.get("base_currency")
+    if not base_currency:
+        raise ValueError(
+            "batch normalization requires --target-currency "
+            "or base_currency in --policy"
+        )
+
+    effective_rate_date = (
+        rate_date if rate_date is not None else policy.get("rate_date")
+    )
+    effective_provider = (
+        provider if provider is not None else policy.get("provider")
+    )
+    effective_portfolio_id = (
+        portfolio_id
+        if portfolio_id is not None
+        else policy.get("portfolio_id")
+    )
+
+    return build_effective_policy(
+        base_currency,
+        rate_date=effective_rate_date,
+        provider=effective_provider,
+        portfolio_id=effective_portfolio_id,
+    )
+
+
+def policy_sha256(policy):
+    return canonical_sha256(policy)
+
+
+def source_fingerprints(paths):
+    fingerprints = []
+    for path in paths:
+        source = Path(path)
+        fingerprints.append(
+            {
+                "name": source.name,
+                "sha256": sha256_file(source),
+            }
+        )
+    return sorted(
+        fingerprints,
+        key=lambda item: (item["name"], item["sha256"]),
+    )
+
+
+def build_run_id(paths, policy):
+    identity = {
+        "schema": "currency-normalizer.run-identity",
+        "schema_version": SCHEMA_VERSION,
+        "policy_sha256": policy_sha256(policy),
+        "sources": source_fingerprints(paths),
+    }
+    return "cn-" + canonical_sha256(identity)[:20]
+
+
+def annotate_batch_items(items, run_id, portfolio_id=None):
+    portfolio_id = validate_portfolio_id(portfolio_id)
+    for item in items:
+        metadata = item["quote"]["normalization"]
+        metadata["run_id"] = run_id
+        metadata["portfolio_id"] = portfolio_id
+    return items
+
+
 def build_rate_source(base, quote, provider=None):
     base = str(base).upper()
     quote = str(quote).upper()
@@ -73,8 +256,8 @@ def build_rate_source(base, quote, provider=None):
 
 
 def get_rate(base, quote, requested_date=None, provider=None):
-    base = str(base).upper()
-    quote = str(quote).upper()
+    base = validate_currency(base, "base currency")
+    quote = validate_currency(quote, "quote currency")
     requested_date = validate_rate_date(requested_date)
     provider = validate_provider(provider)
 
@@ -121,8 +304,8 @@ def get_rate(base, quote, requested_date=None, provider=None):
 
 def normalize_amount(amount, base, quote, rate_date=None, provider=None):
     amount = Decimal(str(amount))
-    base = str(base).upper()
-    quote = str(quote).upper()
+    base = validate_currency(base, "from_currency")
+    quote = validate_currency(quote, "to_currency")
     provider = validate_provider(provider)
 
     rate, applied_rate_date = get_rate(
@@ -163,12 +346,22 @@ def load_quote(path):
             "quotation is missing required field(s): " + ", ".join(missing)
         )
 
+    quote["currency"] = validate_currency(
+        quote["currency"],
+        "quotation currency",
+    )
     return quote
 
 
 def normalize_quote(quote, target_currency, rate_date=None, provider=None):
-    target_currency = str(target_currency).upper()
-    source_currency = str(quote["currency"]).upper()
+    target_currency = validate_currency(
+        target_currency,
+        "target_currency",
+    )
+    source_currency = validate_currency(
+        quote["currency"],
+        "quotation currency",
+    )
 
     result = normalize_amount(
         quote["price"],
@@ -219,45 +412,82 @@ def normalize_quote_files(paths, target_currency, rate_date=None, provider=None)
     return normalized
 
 
+def summarize_rate_source(items):
+    sources = [
+        item["quote"]["normalization"]["rate_source"]
+        for item in items
+    ]
+    first = sources[0]
+    if all(source == first for source in sources[1:]):
+        return dict(first)
+
+    return {
+        "service": RATE_SERVICE,
+        "service_url": RATE_SERVICE_URL,
+        "selection": "mixed",
+        "provider": None,
+    }
+
+
 def write_batch_outputs(
     items,
     output_dir,
     target_currency,
     rate_date=None,
     provider=None,
+    portfolio_id=None,
+    policy=None,
 ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    effective_policy = policy or build_effective_policy(
+        target_currency,
+        rate_date=rate_date,
+        provider=provider,
+        portfolio_id=portfolio_id,
+    )
+    effective_policy = validate_policy_document(effective_policy)
+
+    sources = [item["source"] for item in items]
+    run_id = build_run_id(sources, effective_policy)
+    annotate_batch_items(
+        items,
+        run_id,
+        portfolio_id=effective_policy["portfolio_id"],
+    )
 
     files = []
     for item in items:
         source = Path(item["source"])
         destination = output_dir / (
-            f"{source.stem}_{str(target_currency).lower()}.json"
+            f"{source.stem}_{effective_policy['base_currency'].lower()}.json"
         )
+        source_digest = sha256_file(source)
         write_json(item["quote"], destination)
+        output_digest = sha256_file(destination)
         files.append(
             {
                 "source": item["source"],
+                "source_sha256": source_digest,
                 "output": str(destination),
+                "output_sha256": output_digest,
                 "supplier": item["quote"]["name"],
             }
         )
 
-    provider = validate_provider(provider)
     manifest = {
         "schema": MANIFEST_SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "tool": "currency-normalizer",
         "version": VERSION,
-        "target_currency": str(target_currency).upper(),
-        "requested_rate_date": validate_rate_date(rate_date),
-        "rate_source": {
-            "service": RATE_SERVICE,
-            "service_url": RATE_SERVICE_URL,
-            "selection": "pinned" if provider else "blended",
-            "provider": provider,
-        },
+        "run_id": run_id,
+        "portfolio_id": effective_policy["portfolio_id"],
+        "policy": effective_policy,
+        "policy_sha256": policy_sha256(effective_policy),
+        "target_currency": effective_policy["base_currency"],
+        "requested_rate_date": effective_policy["rate_date"],
+        "rate_source": summarize_rate_source(items),
         "files": files,
     }
     write_json(manifest, output_dir / "normalization-manifest.json")
@@ -338,6 +568,17 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--policy",
+        help=(
+            "Load a portfolio normalization policy JSON file in batch mode. "
+            "CLI target/date/provider/portfolio values override policy values."
+        ),
+    )
+    parser.add_argument(
+        "--portfolio-id",
+        help="Optional portfolio identifier recorded in batch provenance.",
+    )
+    parser.add_argument(
         "--output-dir",
         help="Write batch-normalized quotation files and a manifest here.",
     )
@@ -349,6 +590,9 @@ def validate_cli_mode(parser, args):
     try:
         validate_rate_date(args.rate_date)
         validate_provider(args.provider)
+        validate_portfolio_id(args.portfolio_id)
+        if args.target_currency:
+            validate_currency(args.target_currency, "target_currency")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -356,6 +600,11 @@ def validate_cli_mode(parser, args):
         parser.error("--quote and --quotes cannot be used together.")
 
     quotation_mode = bool(args.quote_path or args.quotes)
+
+    if args.policy and not args.quotes:
+        parser.error("--policy is only valid with --quotes.")
+    if args.portfolio_id and not args.quotes:
+        parser.error("--portfolio-id is only valid with --quotes.")
 
     if quotation_mode:
         if any(
@@ -365,8 +614,12 @@ def validate_cli_mode(parser, args):
             parser.error(
                 "quotation mode cannot be combined with amount/from/to positionals."
             )
-        if not args.target_currency:
-            parser.error("quotation mode requires --target-currency.")
+        if args.quote_path and not args.target_currency:
+            parser.error("--quote mode requires --target-currency.")
+        if args.quotes and not (args.target_currency or args.policy):
+            parser.error(
+                "batch quotation mode requires --target-currency or --policy."
+            )
         if args.quotes and args.output:
             parser.error("batch --quotes mode uses --output-dir, not --output.")
         if args.quote_path and args.output_dir:
@@ -392,23 +645,41 @@ def main():
 
     try:
         if args.quotes:
-            items = normalize_quote_files(
-                args.quotes,
-                args.target_currency,
+            policy_document = (
+                load_portfolio_policy(args.policy)
+                if args.policy
+                else None
+            )
+            effective_policy = resolve_portfolio_policy(
+                policy_document,
+                target_currency=args.target_currency,
                 rate_date=args.rate_date,
                 provider=args.provider,
+                portfolio_id=args.portfolio_id,
+            )
+
+            items = normalize_quote_files(
+                args.quotes,
+                effective_policy["base_currency"],
+                rate_date=effective_policy["rate_date"],
+                provider=effective_policy["provider"],
             )
 
             if args.output_dir:
                 manifest = write_batch_outputs(
                     items,
                     args.output_dir,
-                    args.target_currency,
-                    rate_date=args.rate_date,
-                    provider=args.provider,
+                    effective_policy["base_currency"],
+                    policy=effective_policy,
                 )
                 print(json.dumps(manifest, indent=2, ensure_ascii=False))
             else:
+                run_id = build_run_id(args.quotes, effective_policy)
+                annotate_batch_items(
+                    items,
+                    run_id,
+                    portfolio_id=effective_policy["portfolio_id"],
+                )
                 print(json.dumps(items, indent=2, ensure_ascii=False))
             return
 
