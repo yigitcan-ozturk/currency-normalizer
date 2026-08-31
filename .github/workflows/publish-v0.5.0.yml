@@ -1,0 +1,81 @@
+name: Publish currency-normalizer v0.5.0
+
+on:
+  push:
+    branches: ["ops/publish-v0.5.0"]
+    paths:
+      - ".github/workflows/publish-v0.5.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: f14c88e97607befb6fb443cd273df048befd9e51
+      TAG: v0.5.0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check release target exists
+        run: |
+          set -euo pipefail
+          actual=$(gh api repos/${GITHUB_REPOSITORY}/commits/${RELEASE_SHA} --jq .sha)
+          test "$actual" = "$RELEASE_SHA"
+
+      - name: Refuse conflicting tag or release
+        run: |
+          set -euo pipefail
+          if gh api repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG} >/tmp/tag.json 2>/dev/null; then
+            existing=$(gh api repos/${GITHUB_REPOSITORY}/commits/${TAG} --jq .sha)
+            test "$existing" = "$RELEASE_SHA"
+          else
+            gh api --method POST repos/${GITHUB_REPOSITORY}/git/refs \
+              -f ref="refs/tags/${TAG}" \
+              -f sha="${RELEASE_SHA}"
+          fi
+
+          if gh api repos/${GITHUB_REPOSITORY}/releases/tags/${TAG} >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; refusing to replace it."
+            exit 1
+          fi
+
+      - name: Publish v0.5.0 release
+        run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          Portfolio-grade batch execution and FX audit hardening.
+
+          Highlights:
+          - batch-local FX lookup caching by source currency, target currency, rate date and provider
+          - repeated suppliers using the same FX pair consume one rate snapshot within a batch
+          - fail-fast normalized-output filename collision detection before any output is written
+          - deterministic FX snapshot IDs attached to quotation normalization provenance
+          - deduplicated `rate_snapshots` catalog in batch manifests
+          - deterministic batch `run_id` bound to the actual applied FX snapshot catalog
+          - source/output SHA-256 lineage and portfolio policy provenance retained
+          - schema version remains `1.0` with additive snapshot provenance fields
+          - Python 3.11 / 3.12 / 3.13 CI coverage
+          - real `currency-normalizer → rfqdiff` integration validation
+
+          Release commit: `f14c88e97607befb6fb443cd273df048befd9e51`
+          EOF
+
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "currency-normalizer v0.5.0" \
+            --notes-file /tmp/release-notes.md \
+            --latest
+
+      - name: Verify published release and tag
+        run: |
+          set -euo pipefail
+          tag_sha=$(gh api repos/${GITHUB_REPOSITORY}/commits/${TAG} --jq .sha)
+          test "$tag_sha" = "$RELEASE_SHA"
+
+          release_tag=$(gh api repos/${GITHUB_REPOSITORY}/releases/latest --jq .tag_name)
+          draft=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/${TAG} --jq .draft)
+          prerelease=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/${TAG} --jq .prerelease)
+          test "$release_tag" = "$TAG"
+          test "$draft" = "false"
+          test "$prerelease" = "false"
