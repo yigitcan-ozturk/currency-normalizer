@@ -1,0 +1,67 @@
+name: Prepare v0.4.0 release
+
+on:
+  push:
+    branches: ["release/v0.4.0-final"]
+    paths:
+      - ".github/workflows/release-v0.4-prep.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/v0.4.0-final
+
+      - name: Apply release freeze
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main_path = Path("main.py")
+          main_text = main_path.read_text(encoding="utf-8")
+          old_version = 'VERSION = "0.4.0-dev"'
+          new_version = 'VERSION = "0.4.0"'
+          if old_version not in main_text:
+              raise SystemExit("expected development version marker not found")
+          main_path.write_text(
+              main_text.replace(old_version, new_version, 1),
+              encoding="utf-8",
+          )
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog_text = changelog_path.read_text(encoding="utf-8")
+          old_heading = "## Unreleased — v0.4.0"
+          new_heading = "## v0.4.0 — 2026-08-31"
+          if old_heading not in changelog_text:
+              raise SystemExit("expected v0.4.0 changelog heading not found")
+          changelog_path.write_text(
+              changelog_text.replace(old_heading, new_heading, 1),
+              encoding="utf-8",
+          )
+
+          test_path = Path("tests/test_release_version.py")
+          test_path.write_text(
+              '''import unittest\n\nimport main\n\n\nclass ReleaseVersionTests(unittest.TestCase):\n    def test_runtime_version_is_v040(self):\n        self.assertEqual(main.VERSION, "0.4.0")\n\n    def test_schema_version_remains_stable(self):\n        self.assertEqual(main.SCHEMA_VERSION, "1.0")\n\n\nif __name__ == "__main__":\n    unittest.main()\n''',
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Verify diff
+        run: |
+          git diff --check
+          grep -F 'VERSION = "0.4.0"' main.py
+          grep -F '## v0.4.0 — 2026-08-31' CHANGELOG.md
+
+      - name: Commit release freeze
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py CHANGELOG.md tests/test_release_version.py
+          git commit -m "chore: freeze v0.4.0 release"
+          git push origin HEAD:release/v0.4.0-final
