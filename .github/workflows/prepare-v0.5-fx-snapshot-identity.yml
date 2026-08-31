@@ -1,0 +1,172 @@
+name: Prepare v0.5 FX snapshot identity
+
+on:
+  push:
+    branches: ["feat/v0.5-fx-snapshot-identity"]
+    paths:
+      - ".github/workflows/prepare-v0.5-fx-snapshot-identity.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/v0.5-fx-snapshot-identity
+
+      - name: Apply FX snapshot identity hardening
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          main_path = Path("main.py")
+          text = main_path.read_text(encoding="utf-8")
+
+          old = '''def build_run_id(paths, policy):\n    identity = {\n        "schema": "currency-normalizer.run-identity",\n        "schema_version": SCHEMA_VERSION,\n        "policy_sha256": policy_sha256(policy),\n        "sources": source_fingerprints(paths),\n    }\n    return "cn-" + canonical_sha256(identity)[:20]\n'''
+          new = '''def build_run_id(paths, policy, rate_snapshots=None):\n    identity = {\n        "schema": "currency-normalizer.run-identity",\n        "schema_version": SCHEMA_VERSION,\n        "policy_sha256": policy_sha256(policy),\n        "sources": source_fingerprints(paths),\n    }\n    if rate_snapshots is not None:\n        identity["rate_snapshots"] = sorted(\n            rate_snapshots,\n            key=lambda snapshot: snapshot["snapshot_id"],\n        )\n    return "cn-" + canonical_sha256(identity)[:20]\n'''
+          if old not in text:
+              raise SystemExit("build_run_id block not found")
+          text = text.replace(old, new, 1)
+
+          marker = '\ndef get_rate(base, quote, requested_date=None, provider=None):\n'
+          helper = '''\ndef build_rate_snapshot(\n    from_currency,\n    to_currency,\n    rate,\n    rate_date,\n    rate_source,\n):\n    payload = {\n        "from_currency": validate_currency(from_currency, "from_currency"),\n        "to_currency": validate_currency(to_currency, "to_currency"),\n        "rate": str(rate),\n        "rate_date": str(rate_date),\n        "rate_source": dict(rate_source),\n    }\n    return {\n        "snapshot_id": "fxs-" + canonical_sha256(payload)[:20],\n        **payload,\n    }\n\n\ndef collect_rate_snapshots(items):\n    snapshots = {}\n    for item in items:\n        metadata = item["quote"]["normalization"]\n        snapshot = build_rate_snapshot(\n            metadata["original_currency"],\n            metadata["target_currency"],\n            metadata["rate"],\n            metadata["rate_date"],\n            metadata["rate_source"],\n        )\n        existing_id = metadata.get("rate_snapshot_id")\n        if existing_id is not None and existing_id != snapshot["snapshot_id"]:\n            raise ValueError("quotation rate_snapshot_id does not match FX provenance")\n        metadata["rate_snapshot_id"] = snapshot["snapshot_id"]\n        snapshots[snapshot["snapshot_id"]] = snapshot\n\n    return [snapshots[key] for key in sorted(snapshots)]\n\n\n'''
+          if marker not in text:
+              raise SystemExit("get_rate marker not found")
+          text = text.replace(marker, helper + 'def get_rate(base, quote, requested_date=None, provider=None):\n', 1)
+
+          old = '''    normalized = dict(quote)\n    normalized["currency"] = target_currency\n    normalized["price"] = float(Decimal(result["converted_amount"]))\n    normalized["normalization"] = {\n'''
+          new = '''    rate_snapshot = build_rate_snapshot(\n        source_currency,\n        target_currency,\n        result["rate"],\n        result["rate_date"],\n        result["rate_source"],\n    )\n\n    normalized = dict(quote)\n    normalized["currency"] = target_currency\n    normalized["price"] = float(Decimal(result["converted_amount"]))\n    normalized["normalization"] = {\n'''
+          if old not in text:
+              raise SystemExit("normalize_quote metadata marker not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        "normalized_price": result["converted_amount"],\n        "rate_source": result["rate_source"],\n    }\n'''
+          new = '''        "normalized_price": result["converted_amount"],\n        "rate_source": result["rate_source"],\n        "rate_snapshot_id": rate_snapshot["snapshot_id"],\n    }\n'''
+          if old not in text:
+              raise SystemExit("normalization rate_source block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    sources = [item["source"] for item in items]\n    run_id = build_run_id(sources, effective_policy)\n    annotate_batch_items(\n'''
+          new = '''    sources = [item["source"] for item in items]\n    rate_snapshots = collect_rate_snapshots(items)\n    run_id = build_run_id(\n        sources,\n        effective_policy,\n        rate_snapshots=rate_snapshots,\n    )\n    annotate_batch_items(\n'''
+          if old not in text:
+              raise SystemExit("write_batch_outputs run id block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        "requested_rate_date": effective_policy["rate_date"],\n        "rate_source": summarize_rate_source(items),\n        "files": files,\n'''
+          new = '''        "requested_rate_date": effective_policy["rate_date"],\n        "rate_source": summarize_rate_source(items),\n        "rate_snapshots": rate_snapshots,\n        "files": files,\n'''
+          if old not in text:
+              raise SystemExit("manifest rate_source block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''                run_id = build_run_id(args.quotes, effective_policy)\n                annotate_batch_items(\n'''
+          new = '''                rate_snapshots = collect_rate_snapshots(items)\n                run_id = build_run_id(\n                    args.quotes,\n                    effective_policy,\n                    rate_snapshots=rate_snapshots,\n                )\n                annotate_batch_items(\n'''
+          if old not in text:
+              raise SystemExit("stdout batch run id block not found")
+          text = text.replace(old, new, 1)
+          main_path.write_text(text, encoding="utf-8")
+
+          normalized_schema_path = Path("schemas/normalized-quote.schema.json")
+          normalized_schema = json.loads(normalized_schema_path.read_text(encoding="utf-8"))
+          normalized_schema["properties"]["normalization"]["properties"]["rate_snapshot_id"] = {
+              "type": "string",
+              "pattern": "^fxs-[0-9a-f]{20}$",
+          }
+          normalized_schema_path.write_text(
+              json.dumps(normalized_schema, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+
+          manifest_schema_path = Path("schemas/normalization-manifest.schema.json")
+          manifest_schema = json.loads(manifest_schema_path.read_text(encoding="utf-8"))
+          manifest_schema["properties"]["rate_snapshots"] = {
+              "type": "array",
+              "items": {
+                  "type": "object",
+                  "required": [
+                      "snapshot_id",
+                      "from_currency",
+                      "to_currency",
+                      "rate",
+                      "rate_date",
+                      "rate_source",
+                  ],
+                  "properties": {
+                      "snapshot_id": {"type": "string", "pattern": "^fxs-[0-9a-f]{20}$"},
+                      "from_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+                      "to_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+                      "rate": {"type": "string"},
+                      "rate_date": {"type": "string"},
+                      "rate_source": manifest_schema["properties"]["rate_source"],
+                  },
+                  "additionalProperties": False,
+              },
+          }
+          manifest_schema_path.write_text(
+              json.dumps(manifest_schema, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+
+          tests_path = Path("tests/test_portfolio_runs.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          tests = tests.replace(
+              '    build_run_id,\n',
+              '    build_rate_snapshot,\n    build_run_id,\n    collect_rate_snapshots,\n',
+              1,
+          )
+          marker = '\n    def test_policy_digest_is_stable(self):\n'
+          additions = '''\n    def test_run_id_changes_when_applied_fx_snapshot_changes(self):\n        policy = resolve_portfolio_policy(target_currency="EUR")\n        source_a = build_rate_snapshot(\n            "USD",\n            "EUR",\n            "0.92",\n            "2026-08-31",\n            {\n                "service": "Frankfurter",\n                "service_url": "https://frankfurter.dev",\n                "selection": "blended",\n                "provider": None,\n            },\n        )\n        source_b = build_rate_snapshot(\n            "USD",\n            "EUR",\n            "0.93",\n            "2026-08-31",\n            {\n                "service": "Frankfurter",\n                "service_url": "https://frankfurter.dev",\n                "selection": "blended",\n                "provider": None,\n            },\n        )\n        with tempfile.TemporaryDirectory() as directory:\n            path = Path(directory) / "quote.json"\n            path.write_text('{"v":1}', encoding="utf-8")\n            first = build_run_id([path], policy, [source_a])\n            second = build_run_id([path], policy, [source_b])\n\n        self.assertNotEqual(first, second)\n\n    def test_rate_snapshot_catalog_deduplicates_reused_pair(self):\n        quote_a = {\n            "name": "Supplier A",\n            "currency": "USD",\n            "price": 100,\n            "lead_time_weeks": 6,\n            "payment_days": 30,\n        }\n        quote_b = {\n            "name": "Supplier B",\n            "currency": "USD",\n            "price": 200,\n            "lead_time_weeks": 8,\n            "payment_days": 45,\n        }\n        with tempfile.TemporaryDirectory() as directory:\n            root = Path(directory)\n            a = root / "a.json"\n            b = root / "b.json"\n            a.write_text(json.dumps(quote_a), encoding="utf-8")\n            b.write_text(json.dumps(quote_b), encoding="utf-8")\n            with patch(\n                "main.get_rate",\n                return_value=(Decimal("0.92"), "2026-08-31"),\n            ):\n                items = normalize_quote_files([a, b], "EUR")\n\n        snapshots = collect_rate_snapshots(items)\n        self.assertEqual(len(snapshots), 1)\n        first_id = items[0]["quote"]["normalization"]["rate_snapshot_id"]\n        second_id = items[1]["quote"]["normalization"]["rate_snapshot_id"]\n        self.assertEqual(first_id, second_id)\n        self.assertEqual(first_id, snapshots[0]["snapshot_id"])\n'''
+          if marker not in tests:
+              raise SystemExit("portfolio test insertion marker not found")
+          tests = tests.replace(marker, additions + marker, 1)
+
+          old = '''            self.assertEqual(manifest["policy_sha256"], policy_sha256(policy))\n            self.assertEqual(len(manifest["files"]), 2)\n'''
+          new = '''            self.assertEqual(manifest["policy_sha256"], policy_sha256(policy))\n            self.assertEqual(len(manifest["rate_snapshots"]), 2)\n            snapshot_ids = {\n                snapshot["snapshot_id"]\n                for snapshot in manifest["rate_snapshots"]\n            }\n            self.assertEqual(len(snapshot_ids), 2)\n            self.assertEqual(len(manifest["files"]), 2)\n'''
+          if old not in tests:
+              raise SystemExit("manifest assertion block not found")
+          tests = tests.replace(old, new, 1)
+
+          old = '''                self.assertEqual(metadata["run_id"], manifest["run_id"])\n                self.assertEqual(metadata["portfolio_id"], "FY2026-EU")\n'''
+          new = '''                self.assertEqual(metadata["run_id"], manifest["run_id"])\n                self.assertEqual(metadata["portfolio_id"], "FY2026-EU")\n                self.assertIn(metadata["rate_snapshot_id"], snapshot_ids)\n'''
+          if old not in tests:
+              raise SystemExit("item lineage assertion block not found")
+          tests = tests.replace(old, new, 1)
+          tests_path.write_text(tests, encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          anchor = '- Add regression coverage for within-run FX consistency and output collision safety.\n'
+          addition = anchor + '- Bind deterministic batch run identity to the actual applied FX snapshot catalog and record snapshot IDs in quotation provenance.\n'
+          if anchor not in changelog:
+              raise SystemExit("v0.5 changelog anchor not found")
+          changelog = changelog.replace(anchor, addition, 1)
+          changelog_path.write_text(changelog, encoding="utf-8")
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          anchor = '- stable run identity — equivalent inputs and policy produce the same batch run ID.\n'
+          if anchor not in readme:
+              anchor = '- **Stable run identity** — equivalent inputs and policy produce the same batch run ID.\n'
+          if anchor not in readme:
+              raise SystemExit("README stable run identity anchor not found")
+          replacement = anchor.rstrip('\n') + ' and the identity is bound to the actual applied FX snapshot catalog.\n'
+          readme = readme.replace(anchor, replacement, 1)
+          readme_path.write_text(readme, encoding="utf-8")
+          PY
+
+      - name: Verify feature diff and unit tests
+        run: |
+          git diff --check
+          python -m unittest discover -s tests -v
+
+      - name: Commit FX snapshot identity hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py schemas/normalized-quote.schema.json schemas/normalization-manifest.schema.json tests/test_portfolio_runs.py README.md CHANGELOG.md
+          git commit -m "feat: bind run identity to applied FX snapshots"
+          git push origin HEAD:feat/v0.5-fx-snapshot-identity
