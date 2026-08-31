@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.4.0
+## v0.4.0 — 2026-08-31
 
 - Add portfolio normalization policy files with explicit base currency, rate date, provider and optional portfolio ID.
 - Allow batch CLI values to override policy values without changing the source policy file.
