@@ -215,13 +215,18 @@ def source_fingerprints(paths):
     )
 
 
-def build_run_id(paths, policy):
+def build_run_id(paths, policy, rate_snapshots=None):
     identity = {
         "schema": "currency-normalizer.run-identity",
         "schema_version": SCHEMA_VERSION,
         "policy_sha256": policy_sha256(policy),
         "sources": source_fingerprints(paths),
     }
+    if rate_snapshots is not None:
+        identity["rate_snapshots"] = sorted(
+            rate_snapshots,
+            key=lambda snapshot: snapshot["snapshot_id"],
+        )
     return "cn-" + canonical_sha256(identity)[:20]
 
 
@@ -253,6 +258,46 @@ def build_rate_source(base, quote, provider=None):
         "selection": selection,
         "provider": provider,
     }
+
+
+def build_rate_snapshot(
+    from_currency,
+    to_currency,
+    rate,
+    rate_date,
+    rate_source,
+):
+    payload = {
+        "from_currency": validate_currency(from_currency, "from_currency"),
+        "to_currency": validate_currency(to_currency, "to_currency"),
+        "rate": str(rate),
+        "rate_date": str(rate_date),
+        "rate_source": dict(rate_source),
+    }
+    return {
+        "snapshot_id": "fxs-" + canonical_sha256(payload)[:20],
+        **payload,
+    }
+
+
+def collect_rate_snapshots(items):
+    snapshots = {}
+    for item in items:
+        metadata = item["quote"]["normalization"]
+        snapshot = build_rate_snapshot(
+            metadata["original_currency"],
+            metadata["target_currency"],
+            metadata["rate"],
+            metadata["rate_date"],
+            metadata["rate_source"],
+        )
+        existing_id = metadata.get("rate_snapshot_id")
+        if existing_id is not None and existing_id != snapshot["snapshot_id"]:
+            raise ValueError("quotation rate_snapshot_id does not match FX provenance")
+        metadata["rate_snapshot_id"] = snapshot["snapshot_id"]
+        snapshots[snapshot["snapshot_id"]] = snapshot
+
+    return [snapshots[key] for key in sorted(snapshots)]
 
 
 def get_rate(base, quote, requested_date=None, provider=None):
@@ -379,6 +424,14 @@ def normalize_quote(quote, target_currency, rate_date=None, provider=None, rate_
         rate_cache=rate_cache,
     )
 
+    rate_snapshot = build_rate_snapshot(
+        source_currency,
+        target_currency,
+        result["rate"],
+        result["rate_date"],
+        result["rate_source"],
+    )
+
     normalized = dict(quote)
     normalized["currency"] = target_currency
     normalized["price"] = float(Decimal(result["converted_amount"]))
@@ -394,6 +447,7 @@ def normalize_quote(quote, target_currency, rate_date=None, provider=None, rate_
         "rate_date": result["rate_date"],
         "normalized_price": result["converted_amount"],
         "rate_source": result["rate_source"],
+        "rate_snapshot_id": rate_snapshot["snapshot_id"],
     }
 
     return normalized
@@ -498,7 +552,12 @@ def write_batch_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sources = [item["source"] for item in items]
-    run_id = build_run_id(sources, effective_policy)
+    rate_snapshots = collect_rate_snapshots(items)
+    run_id = build_run_id(
+        sources,
+        effective_policy,
+        rate_snapshots=rate_snapshots,
+    )
     annotate_batch_items(
         items,
         run_id,
@@ -534,6 +593,7 @@ def write_batch_outputs(
         "target_currency": effective_policy["base_currency"],
         "requested_rate_date": effective_policy["rate_date"],
         "rate_source": summarize_rate_source(items),
+        "rate_snapshots": rate_snapshots,
         "files": files,
     }
     write_json(manifest, output_dir / "normalization-manifest.json")
@@ -720,7 +780,12 @@ def main():
                 )
                 print(json.dumps(manifest, indent=2, ensure_ascii=False))
             else:
-                run_id = build_run_id(args.quotes, effective_policy)
+                rate_snapshots = collect_rate_snapshots(items)
+                run_id = build_run_id(
+                    args.quotes,
+                    effective_policy,
+                    rate_snapshots=rate_snapshots,
+                )
                 annotate_batch_items(
                     items,
                     run_id,
