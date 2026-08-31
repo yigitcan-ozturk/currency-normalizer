@@ -1,0 +1,74 @@
+name: Prepare v0.5.0 release
+
+on:
+  push:
+    branches: ["release/v0.5.0-final"]
+    paths:
+      - ".github/workflows/prepare-v0.5.0-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/v0.5.0-final
+
+      - name: Freeze v0.5.0 release metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main_path = Path("main.py")
+          main = main_path.read_text(encoding="utf-8")
+          old = 'VERSION = "0.5.0-dev"'
+          new = 'VERSION = "0.5.0"'
+          if old not in main:
+              raise SystemExit("v0.5.0-dev runtime version not found")
+          main = main.replace(old, new, 1)
+          main_path.write_text(main, encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          old = '## Unreleased — v0.5.0'
+          new = '## v0.5.0 — 2026-08-31'
+          if old not in changelog:
+              raise SystemExit("unreleased v0.5.0 changelog heading not found")
+          changelog = changelog.replace(old, new, 1)
+          changelog_path.write_text(changelog, encoding="utf-8")
+
+          version_test_path = Path("tests/test_release_version.py")
+          version_tests = version_test_path.read_text(encoding="utf-8")
+          old = '''    def test_runtime_version_is_v050_dev(self):\n        self.assertEqual(main.VERSION, "0.5.0-dev")\n'''
+          new = '''    def test_runtime_version_is_v050(self):\n        self.assertEqual(main.VERSION, "0.5.0")\n'''
+          if old not in version_tests:
+              raise SystemExit("v0.5.0-dev release-version assertion not found")
+          version_tests = version_tests.replace(old, new, 1)
+          version_test_path.write_text(version_tests, encoding="utf-8")
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          old = '''Latest published release: **v0.4.0**.\n\nDevelopment line: **v0.5.0-dev**, focused on batch execution consistency and collision-safe output handling. The v0.4.0 portfolio policy, deterministic run identity and SHA-256 lineage contracts remain the released baseline.'''
+          new = '''Latest published release: **v0.5.0**.\n\nThe v0.5.0 release hardens portfolio batch execution with batch-local FX lookup caching, fail-fast output filename collision detection, deterministic FX snapshot identifiers, a manifest FX snapshot catalog, and run identity bound to the actual applied FX observations.'''
+          if old not in readme:
+              raise SystemExit("README v0.5 development status block not found")
+          readme = readme.replace(old, new, 1)
+          readme_path.write_text(readme, encoding="utf-8")
+          PY
+
+      - name: Verify release candidate
+        run: |
+          git diff --check
+          python -m unittest discover -s tests -v
+
+      - name: Commit release freeze
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py CHANGELOG.md README.md tests/test_release_version.py
+          git commit -m "chore: finalize v0.5.0 release"
+          git push origin HEAD:release/v0.5.0-final
