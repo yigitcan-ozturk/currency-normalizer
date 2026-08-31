@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-VERSION = "0.4.0"
+VERSION = "0.5.0-dev"
 SCHEMA_VERSION = "1.0"
 RATE_SERVICE = "Frankfurter"
 RATE_SERVICE_URL = "https://frankfurter.dev"
@@ -302,18 +302,25 @@ def get_rate(base, quote, requested_date=None, provider=None):
     return data["rate"], data["date"]
 
 
-def normalize_amount(amount, base, quote, rate_date=None, provider=None):
+def normalize_amount(amount, base, quote, rate_date=None, provider=None, rate_cache=None):
     amount = Decimal(str(amount))
     base = validate_currency(base, "from_currency")
     quote = validate_currency(quote, "to_currency")
     provider = validate_provider(provider)
+    rate_date = validate_rate_date(rate_date)
+    cache_key = (base, quote, rate_date, provider)
 
-    rate, applied_rate_date = get_rate(
-        base,
-        quote,
-        rate_date,
-        provider=provider,
-    )
+    if rate_cache is not None and cache_key in rate_cache:
+        rate, applied_rate_date = rate_cache[cache_key]
+    else:
+        rate, applied_rate_date = get_rate(
+            base,
+            quote,
+            rate_date,
+            provider=provider,
+        )
+        if rate_cache is not None:
+            rate_cache[cache_key] = (rate, applied_rate_date)
 
     converted = (amount * rate).quantize(
         Decimal("0.01"),
@@ -353,7 +360,7 @@ def load_quote(path):
     return quote
 
 
-def normalize_quote(quote, target_currency, rate_date=None, provider=None):
+def normalize_quote(quote, target_currency, rate_date=None, provider=None, rate_cache=None):
     target_currency = validate_currency(
         target_currency,
         "target_currency",
@@ -369,6 +376,7 @@ def normalize_quote(quote, target_currency, rate_date=None, provider=None):
         target_currency,
         rate_date=rate_date,
         provider=provider,
+        rate_cache=rate_cache,
     )
 
     normalized = dict(quote)
@@ -391,8 +399,9 @@ def normalize_quote(quote, target_currency, rate_date=None, provider=None):
     return normalized
 
 
-def normalize_quote_files(paths, target_currency, rate_date=None, provider=None):
+def normalize_quote_files(paths, target_currency, rate_date=None, provider=None, rate_cache=None):
     normalized = []
+    rate_cache = {} if rate_cache is None else rate_cache
 
     for path in paths:
         quote_path = Path(path)
@@ -405,6 +414,7 @@ def normalize_quote_files(paths, target_currency, rate_date=None, provider=None)
                     target_currency,
                     rate_date=rate_date,
                     provider=provider,
+                    rate_cache=rate_cache,
                 ),
             }
         )
@@ -429,6 +439,39 @@ def summarize_rate_source(items):
     }
 
 
+def plan_batch_output_paths(items, output_dir, target_currency):
+    output_dir = Path(output_dir)
+    target_currency = validate_currency(target_currency, "target_currency")
+    seen = {}
+    destinations = []
+
+    for item in items:
+        source = Path(item["source"])
+        filename = f"{source.stem}_{target_currency.lower()}.json"
+        key = filename.casefold()
+        entry = seen.setdefault(
+            key,
+            {"filename": filename, "sources": []},
+        )
+        entry["sources"].append(str(source))
+        destinations.append(output_dir / filename)
+
+    collisions = [
+        entry for entry in seen.values() if len(entry["sources"]) > 1
+    ]
+    if collisions:
+        details = "; ".join(
+            f"{entry['filename']}: {', '.join(entry['sources'])}"
+            for entry in sorted(
+                collisions,
+                key=lambda entry: entry["filename"].casefold(),
+            )
+        )
+        raise ValueError(f"batch output filename collision(s): {details}")
+
+    return destinations
+
+
 def write_batch_outputs(
     items,
     output_dir,
@@ -439,7 +482,6 @@ def write_batch_outputs(
     policy=None,
 ):
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     effective_policy = policy or build_effective_policy(
         target_currency,
@@ -448,6 +490,12 @@ def write_batch_outputs(
         portfolio_id=portfolio_id,
     )
     effective_policy = validate_policy_document(effective_policy)
+    destinations = plan_batch_output_paths(
+        items,
+        output_dir,
+        effective_policy["base_currency"],
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     sources = [item["source"] for item in items]
     run_id = build_run_id(sources, effective_policy)
@@ -458,11 +506,9 @@ def write_batch_outputs(
     )
 
     files = []
-    for item in items:
+    for index, item in enumerate(items):
         source = Path(item["source"])
-        destination = output_dir / (
-            f"{source.stem}_{effective_policy['base_currency'].lower()}.json"
-        )
+        destination = destinations[index]
         source_digest = sha256_file(source)
         write_json(item["quote"], destination)
         output_digest = sha256_file(destination)

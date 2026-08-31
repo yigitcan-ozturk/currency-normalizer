@@ -110,7 +110,7 @@ class CurrencyNormalizerTests(unittest.TestCase):
         self.assertEqual(result["schema"], AMOUNT_SCHEMA)
         self.assertEqual(result["schema_version"], SCHEMA_VERSION)
         self.assertEqual(result["tool"], "currency-normalizer")
-        self.assertEqual(result["version"], "0.4.0")
+        self.assertEqual(result["version"], "0.5.0-dev")
         self.assertEqual(result["from_currency"], "USD")
         self.assertEqual(result["to_currency"], "EUR")
         self.assertEqual(result["converted_amount"], "92.00")
@@ -216,6 +216,65 @@ class CurrencyNormalizerTests(unittest.TestCase):
             self.assertTrue((output_dir / "supplier_a_eur.json").exists())
             self.assertTrue((output_dir / "supplier_b_eur.json").exists())
             self.assertTrue((output_dir / "normalization-manifest.json").exists())
+
+    def test_batch_reuses_rate_for_duplicate_pair(self):
+        quote_a = {
+            "name": "Supplier A",
+            "currency": "USD",
+            "price": 100,
+            "lead_time_weeks": 6,
+            "payment_days": 30,
+        }
+        quote_b = {
+            "name": "Supplier B",
+            "currency": "USD",
+            "price": 200,
+            "lead_time_weeks": 8,
+            "payment_days": 45,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path_a = root / "supplier_a.json"
+            path_b = root / "supplier_b.json"
+            path_a.write_text(json.dumps(quote_a), encoding="utf-8")
+            path_b.write_text(json.dumps(quote_b), encoding="utf-8")
+            with patch(
+                "main.get_rate",
+                return_value=(Decimal("0.92"), "2026-08-01"),
+            ) as mocked_get_rate:
+                items = normalize_quote_files(
+                    [path_a, path_b],
+                    "EUR",
+                    rate_date="2026-08-01",
+                    provider="ECB",
+                )
+        self.assertEqual(mocked_get_rate.call_count, 1)
+        self.assertEqual(items[0]["quote"]["price"], 92.0)
+        self.assertEqual(items[1]["quote"]["price"], 184.0)
+
+    def test_output_filename_collision_fails_before_writing(self):
+        quote = {
+            "name": "Supplier",
+            "currency": "EUR",
+            "price": 100,
+            "lead_time_weeks": 6,
+            "payment_days": 30,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_dir = root / "first"
+            second_dir = root / "second"
+            first_dir.mkdir()
+            second_dir.mkdir()
+            first_path = first_dir / "supplier.json"
+            second_path = second_dir / "supplier.json"
+            first_path.write_text(json.dumps(quote), encoding="utf-8")
+            second_path.write_text(json.dumps(quote), encoding="utf-8")
+            items = normalize_quote_files([first_path, second_path], "EUR")
+            output_dir = root / "normalized"
+            with self.assertRaisesRegex(ValueError, "filename collision"):
+                write_batch_outputs(items, output_dir, "EUR")
+            self.assertFalse(output_dir.exists())
 
 
 if __name__ == "__main__":

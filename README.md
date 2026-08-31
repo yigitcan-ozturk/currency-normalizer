@@ -21,6 +21,8 @@ The tool is responsible for **FX normalization only**. It converts current or hi
 - explicit schema/version metadata;
 - exact original and normalized decimal values in provenance;
 - batch normalization manifests;
+- batch-local FX lookup caching for within-run rate consistency;
+- fail-fast normalized-output filename collision detection;
 - portfolio/base-currency policies;
 - deterministic batch `run_id` values;
 - SHA-256 lineage for source and normalized files;
@@ -227,9 +229,9 @@ The cross-repository integration test runs when `RFQDIFF_MAIN` points to an `rfq
 
 ## Status
 
-Latest published release: **v0.3.0**.
+Latest published release: **v0.4.0**.
 
-`main` now also contains the post-v0.3 reproducible portfolio-run work: reusable base-currency policy, deterministic run identity, source/output SHA-256 lineage and stronger portfolio provenance. These capabilities are present on `main` but should be treated as the next release line until a new tagged release is published.
+Development line: **v0.5.0-dev**, focused on batch execution consistency and collision-safe output handling. The v0.4.0 portfolio policy, deterministic run identity and SHA-256 lineage contracts remain the released baseline.
 
 ## License
 
