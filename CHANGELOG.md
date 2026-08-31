@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.5.0
+## v0.5.0 — 2026-08-31
 
 - Cache repeated FX lookups per currency pair, rate date and provider within a batch run.
 - Fail before writing batch outputs when source files would map to the same normalized filename.

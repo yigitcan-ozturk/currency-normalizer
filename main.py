@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-VERSION = "0.5.0-dev"
+VERSION = "0.5.0"
 SCHEMA_VERSION = "1.0"
 RATE_SERVICE = "Frankfurter"
 RATE_SERVICE_URL = "https://frankfurter.dev"
