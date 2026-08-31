@@ -229,9 +229,9 @@ The cross-repository integration test runs when `RFQDIFF_MAIN` points to an `rfq
 
 ## Status
 
-Latest published release: **v0.4.0**.
+Latest published release: **v0.5.0**.
 
-Development line: **v0.5.0-dev**, focused on batch execution consistency and collision-safe output handling. The v0.4.0 portfolio policy, deterministic run identity and SHA-256 lineage contracts remain the released baseline.
+The v0.5.0 release hardens portfolio batch execution with batch-local FX lookup caching, fail-fast output filename collision detection, deterministic FX snapshot identifiers, a manifest FX snapshot catalog, and run identity bound to the actual applied FX observations.
 
 ## License
 
