@@ -110,7 +110,7 @@ class CurrencyNormalizerTests(unittest.TestCase):
         self.assertEqual(result["schema"], AMOUNT_SCHEMA)
         self.assertEqual(result["schema_version"], SCHEMA_VERSION)
         self.assertEqual(result["tool"], "currency-normalizer")
-        self.assertEqual(result["version"], "0.4.0-dev")
+        self.assertEqual(result["version"], "0.4.0")
         self.assertEqual(result["from_currency"], "USD")
         self.assertEqual(result["to_currency"], "EUR")
         self.assertEqual(result["converted_amount"], "92.00")
