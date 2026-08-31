@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — v0.5.0
+
+- Cache repeated FX lookups per currency pair, rate date and provider within a batch run.
+- Fail before writing batch outputs when source files would map to the same normalized filename.
+- Add regression coverage for within-run FX consistency and output collision safety.
+
 ## v0.4.0 — 2026-08-31
 
 - Add portfolio normalization policy files with explicit base currency, rate date, provider and optional portfolio ID.
