@@ -8,7 +8,9 @@ from unittest.mock import patch
 from main import (
     POLICY_SCHEMA,
     SCHEMA_VERSION,
+    build_rate_snapshot,
     build_run_id,
+    collect_rate_snapshots,
     load_portfolio_policy,
     normalize_quote_files,
     policy_sha256,
@@ -89,6 +91,74 @@ class PortfolioRunTests(unittest.TestCase):
 
         self.assertNotEqual(first, second)
 
+    def test_run_id_changes_when_applied_fx_snapshot_changes(self):
+        policy = resolve_portfolio_policy(target_currency="EUR")
+        source_a = build_rate_snapshot(
+            "USD",
+            "EUR",
+            "0.92",
+            "2026-08-31",
+            {
+                "service": "Frankfurter",
+                "service_url": "https://frankfurter.dev",
+                "selection": "blended",
+                "provider": None,
+            },
+        )
+        source_b = build_rate_snapshot(
+            "USD",
+            "EUR",
+            "0.93",
+            "2026-08-31",
+            {
+                "service": "Frankfurter",
+                "service_url": "https://frankfurter.dev",
+                "selection": "blended",
+                "provider": None,
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quote.json"
+            path.write_text('{"v":1}', encoding="utf-8")
+            first = build_run_id([path], policy, [source_a])
+            second = build_run_id([path], policy, [source_b])
+
+        self.assertNotEqual(first, second)
+
+    def test_rate_snapshot_catalog_deduplicates_reused_pair(self):
+        quote_a = {
+            "name": "Supplier A",
+            "currency": "USD",
+            "price": 100,
+            "lead_time_weeks": 6,
+            "payment_days": 30,
+        }
+        quote_b = {
+            "name": "Supplier B",
+            "currency": "USD",
+            "price": 200,
+            "lead_time_weeks": 8,
+            "payment_days": 45,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            a = root / "a.json"
+            b = root / "b.json"
+            a.write_text(json.dumps(quote_a), encoding="utf-8")
+            b.write_text(json.dumps(quote_b), encoding="utf-8")
+            with patch(
+                "main.get_rate",
+                return_value=(Decimal("0.92"), "2026-08-31"),
+            ):
+                items = normalize_quote_files([a, b], "EUR")
+
+        snapshots = collect_rate_snapshots(items)
+        self.assertEqual(len(snapshots), 1)
+        first_id = items[0]["quote"]["normalization"]["rate_snapshot_id"]
+        second_id = items[1]["quote"]["normalization"]["rate_snapshot_id"]
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(first_id, snapshots[0]["snapshot_id"])
+
     def test_policy_digest_is_stable(self):
         policy = resolve_portfolio_policy(
             target_currency="EUR",
@@ -151,6 +221,12 @@ class PortfolioRunTests(unittest.TestCase):
             self.assertEqual(manifest["portfolio_id"], "FY2026-EU")
             self.assertEqual(manifest["policy"], policy)
             self.assertEqual(manifest["policy_sha256"], policy_sha256(policy))
+            self.assertEqual(len(manifest["rate_snapshots"]), 2)
+            snapshot_ids = {
+                snapshot["snapshot_id"]
+                for snapshot in manifest["rate_snapshots"]
+            }
+            self.assertEqual(len(snapshot_ids), 2)
             self.assertEqual(len(manifest["files"]), 2)
             for file_record in manifest["files"]:
                 self.assertEqual(len(file_record["source_sha256"]), 64)
@@ -168,6 +244,7 @@ class PortfolioRunTests(unittest.TestCase):
                 metadata = item["quote"]["normalization"]
                 self.assertEqual(metadata["run_id"], manifest["run_id"])
                 self.assertEqual(metadata["portfolio_id"], "FY2026-EU")
+                self.assertIn(metadata["rate_snapshot_id"], snapshot_ids)
 
 
 if __name__ == "__main__":

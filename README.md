@@ -212,7 +212,7 @@ The cross-repository integration test runs when `RFQDIFF_MAIN` points to an `rfq
 - **Provider reproducibility** — a named authority can be pinned when required.
 - **Portfolio policy** — procurement normalization assumptions can be defined once and reused.
 - **Content-addressed lineage** — source/output SHA-256 values expose file-level evidence.
-- **Stable run identity** — equivalent inputs and policy produce the same batch run ID.
+- **Stable run identity** — equivalent inputs and policy produce the same batch run ID. and the identity is bound to the actual applied FX snapshot catalog.
 - **Versioned contracts** — downstream tools can identify the data contract explicitly.
 - **Single responsibility** — normalization stays separate from scoring and compliance.
 
