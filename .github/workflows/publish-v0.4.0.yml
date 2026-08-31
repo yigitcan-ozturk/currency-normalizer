@@ -1,0 +1,76 @@
+name: Publish currency-normalizer v0.4.0
+
+on:
+  push:
+    branches: ["ops/publish-v0.4.0"]
+    paths:
+      - ".github/workflows/publish-v0.4.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish and verify v0.4.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: cfde50e811c040da27bee4a7ff63b1fdd502fbdc
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+
+          main_sha="$(gh api "repos/$repo/branches/main" --jq '.commit.sha')"
+          if [ "$main_sha" != "$TARGET_SHA" ]; then
+            echo "main moved: expected $TARGET_SHA, got $main_sha"
+            exit 1
+          fi
+
+          cat > /tmp/release-notes.md <<'EOF'
+          Portfolio-grade, reproducible supplier quotation FX normalization.
+
+          Highlights:
+          - portfolio normalization policies with explicit base currency, rate date, provider and optional portfolio ID
+          - deterministic, order-independent normalization run IDs
+          - SHA-256 lineage for source quotation files and normalized outputs
+          - policy SHA-256 provenance in normalization manifests
+          - portfolio and run identifiers propagated into quotation normalization metadata
+          - strengthened JSON Schema contracts
+          - Python 3.11 / 3.12 / 3.13 CI coverage
+          - real currency-normalizer → rfqdiff integration validation
+
+          Release commit: cfde50e811c040da27bee4a7ff63b1fdd502fbdc
+          EOF
+
+          if gh api "repos/$repo/releases/tags/v0.4.0" >/dev/null 2>&1; then
+            echo "v0.4.0 release already exists; verifying it."
+          else
+            gh release create v0.4.0 \
+              --repo "$repo" \
+              --target "$TARGET_SHA" \
+              --title "currency-normalizer v0.4.0" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+          fi
+
+          resolved_tag_sha="$(gh api "repos/$repo/commits/v0.4.0" --jq '.sha')"
+          if [ "$resolved_tag_sha" != "$TARGET_SHA" ]; then
+            echo "v0.4.0 resolves to $resolved_tag_sha, expected $TARGET_SHA"
+            exit 1
+          fi
+
+          latest_tag="$(gh api "repos/$repo/releases/latest" --jq '.tag_name')"
+          if [ "$latest_tag" != "v0.4.0" ]; then
+            echo "latest release is $latest_tag, expected v0.4.0"
+            exit 1
+          fi
+
+          draft="$(gh api "repos/$repo/releases/tags/v0.4.0" --jq '.draft')"
+          prerelease="$(gh api "repos/$repo/releases/tags/v0.4.0" --jq '.prerelease')"
+          if [ "$draft" != "false" ] || [ "$prerelease" != "false" ]; then
+            echo "release is unexpectedly draft/prerelease"
+            exit 1
+          fi
+
+          echo "v0.4.0 published and verified at $TARGET_SHA"
