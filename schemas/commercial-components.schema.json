@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yigitcan-ozturk/currency-normalizer/schemas/commercial-components.schema.json",
+  "title": "currency-normalizer commercial quotation components",
+  "type": "object",
+  "required": ["components"],
+  "properties": {
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "description", "status"],
+        "properties": {
+          "type": {
+            "enum": ["equipment", "freight", "packing", "origin_charge", "destination_charge", "tax", "surcharge", "discount", "other"]
+          },
+          "description": {"type": "string", "minLength": 1},
+          "status": {
+            "enum": ["included", "excluded", "optional", "conditional", "unknown"]
+          },
+          "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+          "unit_price": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$"},
+          "quantity": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"},
+          "supplier_total": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$"},
+          "computed_total": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$"},
+          "normalized_total": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$"},
+          "condition": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "comparable_pre_tax_total": {"type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$"},
+    "target_currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "reconciliations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["component_index", "computed_total", "supplier_total", "difference", "matches"],
+        "properties": {
+          "component_index": {"type": "integer", "minimum": 0},
+          "computed_total": {"type": "string"},
+          "supplier_total": {"type": "string"},
+          "difference": {"type": "string"},
+          "matches": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
